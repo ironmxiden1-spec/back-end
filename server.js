@@ -6,6 +6,7 @@ const path = require("path");
 require("dotenv").config();
 
 const { MongoMemoryServer } = require("mongodb-memory-server");
+const { resolveMongoUri } = require("./utils/mongoEnv");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -31,11 +32,15 @@ function resolveMongoMemorySystemBinary() {
 app.use(cors({
   origin: "*"
 }));
-app.use(express.json());
+app.use(express.json({
+  verify: (req, res, buffer) => {
+    req.rawBody = Buffer.from(buffer);
+  }
+}));
 
 // ===== DATABASE =====
 async function startDatabase() {
-  const configuredUri = process.env.MONGODB_URI;
+  const configuredUri = resolveMongoUri(process.env);
 
   if (configuredUri) {
     try {
@@ -92,6 +97,8 @@ app.use("/api/resellerxpress", require("./routes/resellerxpress"));
 app.use("/api/remadata", require("./routes/remadata"));
 app.use("/api/sendcomms", require("./routes/sendcomms"));
 app.use("/api/support", require("./routes/support"));
+app.use("/api/admin", require("./routes/admin"));
+app.use("/api/payments", require("./routes/payments"));
 
 // ===== TEST ROUTE =====
 app.get("/", (req, res) => {
@@ -105,16 +112,16 @@ app.get("/", (req, res) => {
 // ===== SERVER =====
 async function startServer() {
   app.locals.dbReady = false;
-  app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
-
   try {
     app.locals.dbReady = await startDatabase();
   } catch (err) {
     app.locals.dbReady = false;
     console.error("Database startup failed; continuing with file-backed storage:", err.message);
   }
+
+  app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+  });
 }
 
 startServer();

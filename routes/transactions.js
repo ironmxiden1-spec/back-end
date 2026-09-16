@@ -2,10 +2,17 @@ const express = require("express");
 const router = express.Router();
 const Transaction = require("../models/Transaction");
 const { createId, isFallback, readTransactions, writeTransactions } = require("../utils/localStore");
+const { requireUser } = require("../utils/auth");
+
+router.use(requireUser);
 
 // ===== GET USER TRANSACTIONS =====
 router.get("/:email", async (req, res) => {
   try {
+    if (req.params.email.toLowerCase() !== req.user.email.toLowerCase()) {
+      return res.status(403).json({ msg: "You can only access your own transactions" });
+    }
+
     if (isFallback(req)) {
       const txs = readTransactions()
         .filter((transaction) => transaction.email === req.params.email)
@@ -26,15 +33,16 @@ router.get("/:email", async (req, res) => {
 // ===== CREATE TRANSACTION =====
 router.post("/", async (req, res) => {
   try {
+    const transactionData = { ...req.body, email: req.user.email };
     if (isFallback(req)) {
-      const tx = { ...req.body, _id: req.body?._id || createId(), date: req.body?.date || new Date().toISOString() };
+      const tx = { ...transactionData, _id: transactionData._id || createId(), date: transactionData.date || new Date().toISOString() };
       const transactions = readTransactions();
       transactions.push(tx);
       writeTransactions(transactions);
       return res.json({ msg: "Transaction saved", tx });
     }
 
-    const tx = new Transaction(req.body);
+    const tx = new Transaction(transactionData);
     await tx.save();
 
     res.json({ msg: "Transaction saved", tx });

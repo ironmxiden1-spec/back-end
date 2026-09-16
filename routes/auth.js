@@ -5,6 +5,7 @@ const crypto = require("crypto");
 const axios = require("axios");
 const nodemailer = require("nodemailer");
 const { createId, isFallback, readUsers, writeUsers } = require("../utils/localStore");
+const { createAuthToken } = require("../utils/auth");
 
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString("hex");
@@ -36,7 +37,8 @@ function publicUser(user) {
     email: user.email,
     balance: user.balance || 0,
     createdAt: user.createdAt,
-    googleId: user.googleId || ""
+    googleId: user.googleId || "",
+    authToken: createAuthToken(user)
   };
 }
 

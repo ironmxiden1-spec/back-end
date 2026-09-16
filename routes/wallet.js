@@ -6,6 +6,9 @@ const User = require("../models/user");
 const Transaction = require("../models/Transaction");
 const { placeProviderOrder, getPlans, getFallbackPlans } = require("../services/resellerxpress");
 const { createId, isFallback, readUsers, writeUsers, readTransactions, writeTransactions } = require("../utils/localStore");
+const { requireUser } = require("../utils/auth");
+
+router.use(requireUser);
 
 async function verifyPaystackReference(reference) {
   if (!process.env.PAYSTACK_SECRET_KEY) {
@@ -61,6 +64,10 @@ function validatePayment(paymentData, expectedAmount) {
 // ==========================
 router.get("/:email", async (req, res) => {
   try {
+    if (req.params.email.toLowerCase() !== req.user.email.toLowerCase()) {
+      return res.status(403).json({ msg: "You can only access your own wallet" });
+    }
+
     if (isFallback(req)) {
       const user = readUsers().find((item) => item.email.toLowerCase() === req.params.email.toLowerCase());
       if (!user) return res.status(404).json({ msg: "User not found" });
@@ -87,7 +94,8 @@ router.get("/:email", async (req, res) => {
 // ==========================
 router.post("/deposit", async (req, res) => {
   try {
-    const { email, amount, reference } = req.body;
+    const { amount, reference } = req.body;
+    const email = req.user.email;
 
     console.log("DEPOSIT REQUEST:", req.body);
 
@@ -180,7 +188,8 @@ router.post("/deposit", async (req, res) => {
 router.post("/buy", async (req, res) => {
   try {
     const incoming = req.body || {};
-    const { email, amount, bundle, phone, reference } = incoming;
+    const { amount, bundle, phone, reference } = incoming;
+    const email = req.user.email;
 
     if (isFallback(req)) {
       const users = readUsers();
