@@ -41,6 +41,11 @@ app.use(express.json({
 // ===== DATABASE =====
 async function startDatabase() {
   const configuredUri = resolveMongoUri(process.env);
+  const isProduction = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+
+  if (isProduction && !configuredUri) {
+    throw new Error("MONGODB_URI is required in production");
+  }
 
   if (configuredUri) {
     try {
@@ -48,12 +53,17 @@ async function startDatabase() {
       console.log("MongoDB connected to configured URI");
       return true;
     } catch (err) {
+      if (isProduction) throw err;
       console.warn("Configured MongoDB URI failed. Using file-backed storage.", err.message);
       return false;
     }
-  } else {
-    console.log("No MONGODB_URI configured. Using in-memory MongoDB for this deployment.");
   }
+
+  if (isProduction) {
+    throw new Error("Production database configuration is incomplete");
+  }
+
+  console.log("No MONGODB_URI configured. Using in-memory MongoDB for local development.");
 
   try {
     const systemBinary = resolveMongoMemorySystemBinary();
@@ -116,7 +126,12 @@ async function startServer() {
     app.locals.dbReady = await startDatabase();
   } catch (err) {
     app.locals.dbReady = false;
-    console.error("Database startup failed; continuing with file-backed storage:", err.message);
+    console.error("Database startup failed:", err.message);
+    if (String(process.env.NODE_ENV || "").toLowerCase() === "production") {
+      process.exitCode = 1;
+      return;
+    }
+    console.error("Continuing with file-backed storage for local development.");
   }
 
   app.listen(PORT, () => {
