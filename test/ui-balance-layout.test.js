@@ -1,0 +1,52 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+test('shop pages should not render wallet balance, user, or deposit card blocks', () => {
+  const pageFiles = [
+    'front-end/mtn.html',
+    'front-end/atgo.html',
+    'front-end/telecel.html'
+  ];
+
+  for (const page of pageFiles) {
+    const filePath = path.join(__dirname, '..', '..', page);
+    const html = fs.readFileSync(filePath, 'utf8');
+    assert.equal(html.includes('id="wallet-balance"'), false, `${page} must not render wallet balance in the shop hero summary`);
+    assert.equal(html.includes('id="user-name"'), false, `${page} must not render the user summary card`);
+    assert.equal(html.includes('id="deposit-amount"'), false, `${page} must not render a deposit form card`);
+  }
+});
+
+test('home page dashboard state must guard accountStats for anonymous users', () => {
+  const helperFile = path.join(__dirname, '..', '..', 'front-end', 'home-page.js');
+  const source = fs.readFileSync(helperFile, 'utf8');
+
+  assert.ok(source.includes("localStorage.removeItem('accountStats')"), 'anonymous users must clear stale accountStats from localStorage');
+  assert.ok(source.includes("if (!user || !user.email)"), 'dashboard load must confirm a user before rendering account stats');
+});
+
+test('shared page scripts must avoid top-level duplicate globals', () => {
+  const files = ['front-end/mtn.js', 'front-end/atgo.js', 'front-end/login-page.js'];
+
+  for (const file of files) {
+    const source = fs.readFileSync(path.join(__dirname, '..', '..', file), 'utf8');
+    assert.ok(source.includes('(() => {') || source.includes('window.WIMPS'), `${file} must scope top-level script state to avoid duplicate global declarations`);
+  }
+});
+
+test('admin routes should degrade to file-backed data when MongoDB is unavailable', () => {
+  const adminRouteSource = fs.readFileSync(path.join(__dirname, '..', 'routes', 'admin.js'), 'utf8');
+
+  assert.ok(adminRouteSource.includes('readData("users.json")'), 'customers route should offer a file-backed fallback for the admin customer view');
+  assert.ok(adminRouteSource.includes('readData("transactions.json")'), 'orders and overview route should offer a file-backed fallback for the admin view');
+});
+
+test('resellerxpress plans should return a visible fallback list when upstream plans are empty', async () => {
+  const { getPlans } = require('../services/resellerxpress');
+  const plans = await getPlans('mtn');
+
+  assert.ok(Array.isArray(plans), 'fallback plans should be returned as an array');
+  assert.ok(plans.length > 0, 'fallback plan list must be non-empty when remote provider payloads are empty');
+});

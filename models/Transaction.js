@@ -1,0 +1,26 @@
+const mongoose = require("mongoose");
+
+const TransactionSchema = new mongoose.Schema({
+  email: String,
+  type: String, // deposit | purchase
+  bundle: String,
+  amount: Number,
+  providerCost: Number,
+  providerFee: Number,
+  paymentFee: Number,
+  expectedProfit: Number,
+  actualProfit: Number,
+  phone: String,
+  status: {
+    type: String,
+    default: "completed"
+  },
+  paymentMethod: String, // wallet | paystack
+  reference: String,
+  date: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+module.exports = mongoose.model("Transaction", TransactionSchema);
