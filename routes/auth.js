@@ -128,6 +128,10 @@ router.post("/login", async (req, res) => {
     const email = String(req.body?.email || "").trim().toLowerCase();
     const password = req.body?.password;
 
+    if (!email || !password) {
+      return res.status(400).json({ msg: "Email and password are required" });
+    }
+
     if (isFallback(req)) {
       const users = readUsers();
       const user = users.find((item) => item.email.toLowerCase() === email);
