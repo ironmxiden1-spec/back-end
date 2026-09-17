@@ -7,6 +7,7 @@ const Transaction = require("../models/Transaction");
 const { placeProviderOrder, getPlans, getFallbackPlans } = require("../services/resellerxpress");
 const { createId, isFallback, readUsers, writeUsers, readTransactions, writeTransactions } = require("../utils/localStore");
 const { requireUser } = require("../utils/auth");
+const { normalizePhone, validatePhone } = require("../utils/phoneValidation");
 
 router.use(requireUser);
 
@@ -191,6 +192,10 @@ router.post("/buy", async (req, res) => {
     const incoming = req.body || {};
     const { amount, bundle, phone, reference } = incoming;
     const email = req.user.email;
+
+    const phoneError = validatePhone(phone, incoming.network || incoming.networkType);
+    if (phoneError) return res.status(400).json({ msg: phoneError });
+    incoming.phone = normalizePhone(phone);
 
     if (isFallback(req)) {
       const users = readUsers();

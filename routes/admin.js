@@ -208,6 +208,35 @@ router.get("/providers", async (req, res) => {
   return res.json({ providers });
 });
 
+router.get("/balances", async (req, res) => {
+  const balances = { paystack: null, resellerxpress: null, remadata: null, sendcomms: null };
+  if (process.env.PAYSTACK_SECRET_KEY) {
+    try {
+      const axios = require("axios");
+      const result = await axios.get("https://api.paystack.co/balance", {
+        headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` },
+        timeout: 10000
+      });
+      const account = Array.isArray(result.data?.data) ? result.data.data[0] : null;
+      balances.paystack = account ? { amount: Number(account.balance || 0) / 100, currency: account.currency || "GHS" } : null;
+    } catch (error) {
+      balances.paystack = { error: error.response?.data?.message || "Paystack balance unavailable" };
+    }
+  }
+  const providerResponse = await Promise.resolve().then(async () => {
+    const result = { providers: [] };
+    if (reseller.isConfigured()) {
+      try { const value = await reseller.getWalletBalance(); result.providers.push({ id: "resellerxpress", amount: Number(value.balance ?? value.data?.balance) }); } catch (error) { result.providers.push({ id: "resellerxpress", error: error.message }); }
+    }
+    if (remadata.isConfigured()) {
+      try { const value = await remadata.getWalletBalance(); result.providers.push({ id: "remadata", amount: Number(value.balance ?? value.data?.balance?.balance ?? value.data?.balance) }); } catch (error) { result.providers.push({ id: "remadata", error: error.message }); }
+    }
+    return result;
+  });
+  providerResponse.providers.forEach((provider) => { balances[provider.id] = provider; });
+  return res.json({ balances });
+});
+
 router.get("/comparison", async (req, res) => {
   try {
     return res.json({ data: await reseller.getPlans(req.query.network), updatedAt: new Date().toISOString() });
