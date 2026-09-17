@@ -20,6 +20,10 @@ const TransactionSchema = new mongoose.Schema({
   date: {
     type: Date,
     default: Date.now
+  },
+  deliveredAt: {
+    type: Date,
+    default: null
   }
 });
 

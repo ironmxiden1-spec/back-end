@@ -129,7 +129,7 @@ router.post("/deposit", async (req, res) => {
       user.balance = Number(user.balance || 0) + paidAmount;
       transactions.push({
         _id: createId(), email, type: "deposit", amount: paidAmount,
-        paymentMethod: "paystack", reference, status: "completed", date: new Date().toISOString()
+        paymentMethod: "paystack", reference, status: "completed", date: new Date().toISOString(), deliveredAt: new Date().toISOString()
       });
       writeUsers(users);
       writeTransactions(transactions);
@@ -167,7 +167,8 @@ router.post("/deposit", async (req, res) => {
       paymentMethod: "paystack",
       reference,
       status: "completed",
-      date: new Date()
+      date: new Date(),
+      deliveredAt: new Date()
     });
 
     res.json({
@@ -343,6 +344,7 @@ router.post("/buy", async (req, res) => {
         tx.status = ["completed", "delivered", "sent", "success", "successful"].includes(providerStatus)
           ? "completed"
           : providerStatus === "failed" ? "failed" : "pending";
+        if (tx.status === "completed") tx.deliveredAt = new Date();
         // Keep the Paystack reference stable so a callback retry cannot deliver twice.
         if (!reference) tx.reference = result?.order?.request_id || requestId;
         await tx.save();
