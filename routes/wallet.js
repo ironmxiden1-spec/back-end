@@ -267,6 +267,18 @@ router.post("/buy", async (req, res) => {
         return res.status(409).json({ msg: "Selected bundle is no longer available" });
       }
 
+      if (plan.purchasable === false || !/^\d+$/.test(String(plan.id))) {
+        return res.status(503).json({
+          msg: "Live bundle plans are temporarily unavailable. Please try again later."
+        });
+      }
+
+      if (plan.purchasable === false || !/^\d+$/.test(String(plan.id))) {
+        return res.status(503).json({
+          msg: "Live bundle plans are temporarily unavailable. Please try again later."
+        });
+      }
+
       const safeQuantity = Number.isFinite(quantity) && quantity > 0 ? quantity : 1;
       const requiredAmount = Number(plan.sellingPrice || 0) * safeQuantity;
       const providerCost = Number(plan.cost || plan.total || 0) * safeQuantity;

@@ -70,6 +70,7 @@ function getFallbackPlans(network) {
         available: true,
         feeKnown: true,
         feeSource: "fallback"
+        ,purchasable: false
       };
     })
   ]));
