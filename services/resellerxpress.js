@@ -6,7 +6,7 @@ const { getBundles: getSendCommsBundles, buyData: buySendComms, isConfigured: is
 const DEFAULT_PROVIDER_FEE = Number(process.env.DEFAULT_PROVIDER_FEE || 0.5);
 let targetProfit = Number(process.env.TARGET_PROFIT || 1);
 let minimumProfit = Number(process.env.MINIMUM_PROFIT || 0.5);
-let maximumOneGbPrice = Number(process.env.MAXIMUM_1GB_PRICE || 5);
+let maximumOneGbPrice = Number(process.env.MAXIMUM_1GB_PRICE || 6);
 
 function getBaseUrl() {
   return process.env.RESSELLERXPRESS_BASE_URL || "https://resellerxpress.shop/api/v1";
@@ -77,15 +77,16 @@ function getFallbackPlans(network) {
 
   return (samples[normalized] || samples.mtn).map((plan) => {
     const pricing = calculateSellingPrice(plan.total, plan.volumeGb);
-      const smsPricing = addSmsPricing({ volumeGb: plan.volumeGb }, plan.total);
+    const smsPricing = addSmsPricing({ volumeGb: plan.volumeGb }, plan.total);
+    if (!smsPricing) return null;
     return {
       ...plan,
       cost: plan.total,
-        smsFee: Number(smsPricing?.smsFee || 0),
-        sellingPrice: smsPricing?.sellingPrice || pricing?.sellingPrice || Number((plan.total + targetProfit).toFixed(2)),
-        expectedProfit: smsPricing?.expectedProfit || pricing?.expectedProfit || targetProfit
+      smsFee: Number(smsPricing.smsFee || 0),
+      sellingPrice: smsPricing.sellingPrice || pricing?.sellingPrice,
+      expectedProfit: smsPricing.expectedProfit || pricing?.expectedProfit
     };
-  });
+  }).filter(Boolean);
 }
 
 function calculateSellingPrice(totalCost, volumeGb) {
