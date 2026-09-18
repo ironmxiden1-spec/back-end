@@ -48,7 +48,7 @@ router.get("/overview", async (req, res) => {
       Transaction.countDocuments({ type: "purchase", status: "failed" })
     ]);
 
-    if (Number(totalUsers || 0) <= 0 && fallbackUsers.length > 0) {
+    if (isFallback(req) && Number(totalUsers || 0) <= 0 && fallbackUsers.length > 0) {
       const todayPurchases = fallbackTransactions.filter((tx) => tx.type === "purchase" && new Date(tx.date || Date.now()) >= today);
       const todaySales = todayPurchases.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
       const todayProfit = todayPurchases.reduce((sum, tx) => sum + Number(tx.actualProfit ?? tx.expectedProfit ?? 0), 0);
@@ -65,7 +65,7 @@ router.get("/overview", async (req, res) => {
       });
     }
 
-    if (Array.isArray(todayTransactions) && todayTransactions.length === 0 && fallbackTransactions.length > 0) {
+    if (isFallback(req) && Array.isArray(todayTransactions) && todayTransactions.length === 0 && fallbackTransactions.length > 0) {
       const todayPurchases = fallbackTransactions.filter((tx) => tx.type === "purchase" && new Date(tx.date || Date.now()) >= today);
       const todaySales = todayPurchases.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
       const todayProfit = todayPurchases.reduce((sum, tx) => sum + Number(tx.actualProfit ?? tx.expectedProfit ?? 0), 0);
@@ -88,6 +88,9 @@ router.get("/overview", async (req, res) => {
     const todayRefunds = todayTransactions.filter((tx) => tx.status === "refunded").reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
     return res.json({ totalUsers, todaySales: Number(todaySales.toFixed(2)), todayProfit: Number(todayProfit.toFixed(2)), todayOrders: todayPurchases.length, successfulOrders, pendingOrders, failedOrders, todayRefunds });
   } catch (error) {
+    if (!isFallback(req)) {
+      return res.status(503).json({ msg: "Live dashboard data is temporarily unavailable" });
+    }
     const todayPurchases = fallbackTransactions.filter((tx) => tx.type === "purchase" && new Date(tx.date || Date.now()) >= today);
     const todaySales = todayPurchases.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
     const todayProfit = todayPurchases.reduce((sum, tx) => sum + Number(tx.actualProfit ?? tx.expectedProfit ?? 0), 0);
@@ -250,7 +253,7 @@ router.post("/data-retention/purge", async (req, res) => {
     return res.status(400).json({ msg: "Type DELETE ALL DATA to confirm this action" });
   }
 
-  const notice = "Admin deleted all transaction history and user accounts to save database space.";
+  const notice = "Account and transaction history were deleted. Run this cleanup weekly to keep the database small.";
   try {
     let deletedUsers = 0;
     let deletedTransactions = 0;
