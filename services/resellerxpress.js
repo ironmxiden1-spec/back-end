@@ -91,22 +91,26 @@ function getFallbackPlans(network) {
 
 function calculateSellingPrice(totalCost, volumeGb) {
   const cost = Number(totalCost);
-  const isOneGb = Math.abs(Number(volumeGb) - 1) < 0.001;
+  const volume = Number(volumeGb);
+  const billableVolume = Number.isFinite(volume) && volume > 0 ? volume : 1;
+  const isOneGb = Math.abs(billableVolume - 1) < 0.001;
   if (!Number.isFinite(cost) || cost <= 0) return null;
 
-  const targetPrice = cost + targetProfit;
+  const targetProfitTotal = targetProfit * billableVolume;
+  const minimumProfitTotal = minimumProfit * billableVolume;
+  const targetPrice = cost + targetProfitTotal;
   if (!isOneGb || targetPrice <= maximumOneGbPrice) {
     return {
       sellingPrice: Number(targetPrice.toFixed(2)),
-      expectedProfit: Number(targetProfit.toFixed(2))
+      expectedProfit: Number(targetProfitTotal.toFixed(2))
     };
   }
 
-  const minimumPrice = cost + minimumProfit;
+  const minimumPrice = cost + minimumProfitTotal;
   if (minimumPrice <= maximumOneGbPrice) {
     return {
       sellingPrice: Number(minimumPrice.toFixed(2)),
-      expectedProfit: Number(minimumProfit.toFixed(2))
+      expectedProfit: Number(minimumProfitTotal.toFixed(2))
     };
   }
 
