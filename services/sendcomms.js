@@ -57,14 +57,20 @@ function getHeaders() {
 }
 
 function buildPlanRecord(plan, network) {
-  const price = Number(plan.price ?? plan.amount ?? plan.total ?? plan.api_price ?? plan.sell_price ?? plan.cost ?? 0);
+  const listedPrice = Number(plan.price?.amount ?? plan.amount ?? plan.total ?? plan.api_price ?? plan.sell_price ?? plan.cost ?? 0);
+  const providerPrice = Number(plan.provider_price?.amount ?? plan.cost ?? listedPrice);
+  const price = Number.isFinite(providerPrice) && providerPrice > 0 ? providerPrice : listedPrice;
   const fee = Number(plan.fee ?? plan.handling_fee ?? plan.service_fee ?? plan.processing_fee ?? 0);
-  const total = Number(plan.total ?? price + fee);
+  const total = Number.isFinite(providerPrice) && providerPrice > 0 ? providerPrice + fee : Number(plan.total ?? price + fee);
   const normalizedNetwork = normalizeNetwork(plan.network || network || "mtn");
   const rawVolume = plan.capacity_gb ?? plan.capacity_mb ?? plan.volume_gb ?? plan.volume ?? plan.data_size ?? plan.bundle_size ?? 0;
   const volumeText = String(rawVolume).toLowerCase();
   const volumeNumber = Number(String(rawVolume).replace(/[^0-9.]/g, ""));
-  const volumeGb = volumeText.includes("mb") || plan.capacity_mb !== undefined ? volumeNumber / 1024 : volumeNumber;
+  const volumeGb = plan.capacity_gb !== undefined || plan.volume_gb !== undefined
+    ? volumeNumber
+    : volumeText.includes("mb") || plan.capacity_mb !== undefined
+      ? volumeNumber / 1024
+      : volumeNumber;
   const stableId = `sendcomms:${normalizedNetwork}:${volumeGb}`;
 
   return {

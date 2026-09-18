@@ -133,9 +133,11 @@ function normalizePlanRecord(plan, network, provider) {
   const rawVolume = plan.volume_gb ?? plan.volume ?? plan.volume_mb ?? plan.volumeInMB ?? plan.capacity_gb ?? plan.capacity_mb;
   const volumeNumber = Number(String(rawVolume ?? "").replace(/[^0-9.]/g, ""));
   const volumeUnit = String(rawVolume ?? "").toLowerCase();
-  const volumeGb = volumeUnit.includes("mb") || plan.volume_mb !== undefined || plan.volumeInMB !== undefined || plan.capacity_mb !== undefined
-    ? volumeNumber / 1024
-    : volumeNumber;
+  const volumeGb = plan.volume_gb !== undefined || plan.capacity_gb !== undefined
+    ? volumeNumber
+    : volumeUnit.includes("mb") || plan.volume_mb !== undefined || plan.volumeInMB !== undefined || plan.capacity_mb !== undefined
+      ? volumeNumber / 1024
+      : volumeNumber;
   const stableId = `${provider || "provider"}:${normalizedNetwork}:${volumeGb}`;
 
   return {
@@ -250,21 +252,6 @@ async function getSendCommsPlans(network) {
 async function getPlans(network) {
   await loadPricingRules();
   const normalizedNetwork = normalizeNetwork(network) || network || "mtn";
-
-  // Use SendComms as the catalog when it is configured so the shop shows plans
-  // that can actually be delivered by the selected provider.
-  if (isSendCommsConfigured()) {
-    const sendcommsPlans = await getSendCommsPlans(normalizedNetwork);
-    if (sendcommsPlans.length > 0) {
-      return sendcommsPlans
-        .map((plan) => {
-          const pricing = calculateSellingPrice(Number(plan.total), Number(plan.volumeGb));
-          return pricing ? { ...plan, cost: Number(plan.total), sellingPrice: pricing.sellingPrice, expectedProfit: pricing.expectedProfit } : null;
-        })
-        .filter(Boolean)
-        .sort((a, b) => a.total - b.total);
-    }
-  }
 
   const [resellerPlansResult, remadataPlansResult, sendcommsPlansResult] = await Promise.allSettled([
     getResellerPlans(normalizedNetwork),
