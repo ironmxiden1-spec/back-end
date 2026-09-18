@@ -24,6 +24,18 @@ function normalizeNetwork(network) {
   return value;
 }
 
+function normalizeVolume(volume) {
+  if (volume === undefined || volume === null || volume === "") return null;
+  if (typeof volume === "number") return volume;
+
+  const text = String(volume).trim().toLowerCase();
+  if (!text) return null;
+  if (text.endsWith("mb")) return Number(text.replace(/[^\d.]/g, ""));
+  if (text.endsWith("gb")) return Number(text.replace(/[^\d.]/g, "")) * 1024;
+  if (/^\d+(\.\d+)?$/.test(text)) return Number(text);
+  return null;
+}
+
 function normalizePurchaseInput(body = {}) {
   const networkType = normalizeNetwork(
     body.networkType || body.network || body.network_name || body.providerNetwork
