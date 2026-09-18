@@ -345,12 +345,15 @@ router.post("/buy", async (req, res) => {
           quantity
         });
 
-        const providerStatus = String(result?.data?.status || result?.status || result?.order?.status || "pending").toLowerCase();
-        const confirmedDeliveryStatuses = ["completed", "delivered", "sent", "successful"];
-        const acceptedStatuses = ["success", "accepted", "processing", "queued", "pending"];
+        const providerStatus = String(
+          result?.data?.delivery_status || result?.data?.fulfillment_status ||
+          result?.delivery_status || result?.fulfillment_status ||
+          result?.data?.status || result?.status || result?.order?.status || "pending"
+        ).toLowerCase();
+        const confirmedDeliveryStatuses = ["completed", "delivered", "sent", "delivered_successfully"];
         tx.status = confirmedDeliveryStatuses.includes(providerStatus)
           ? "completed"
-          : providerStatus === "failed" ? "failed" : acceptedStatuses.includes(providerStatus) ? "pending" : "pending";
+          : providerStatus === "failed" ? "failed" : "pending";
         tx.actualProfit = Number((requiredAmount - providerCost - Number(plan.fee || 0) * safeQuantity).toFixed(2));
         if (tx.status === "completed") tx.deliveredAt = new Date();
         // Keep the Paystack reference stable so a callback retry cannot deliver twice.
@@ -358,7 +361,11 @@ router.post("/buy", async (req, res) => {
         await tx.save();
 
         return res.json({
-          msg: result.message || (tx.status === "completed" ? "Bundle delivered successfully" : "Payment accepted; your bundle is being delivered"),
+          msg: tx.status === "completed"
+            ? "Bundle delivery confirmed by the provider"
+            : tx.status === "failed"
+              ? "The provider could not deliver this bundle"
+              : "Payment accepted; your bundle is being delivered",
           balance: user.balance || 0,
           data: result
         });
