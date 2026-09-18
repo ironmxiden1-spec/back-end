@@ -6,7 +6,8 @@ const AdminSetting = require("../models/AdminSetting");
 const reseller = require("../services/resellerxpress");
 const remadata = require("../services/remadata");
 const sendcomms = require("../services/sendcomms");
-const { readData } = require("../utils/fileDb");
+const { readData, writeData } = require("../utils/fileDb");
+const { isFallback, readUsers, writeUsers, readTransactions, writeTransactions } = require("../utils/localStore");
 
 const router = express.Router();
 
@@ -197,13 +198,16 @@ router.get("/providers", async (req, res) => {
   const providers = [
     { id: "resellerxpress", name: "Reseller", configured: reseller.isConfigured(), balance: null },
     { id: "remadata", name: "RemaData", configured: remadata.isConfigured(), balance: null },
-    { id: "sendcomms", name: "SendComms", configured: sendcomms.isConfigured(), balance: null, balanceUnavailable: true }
+    { id: "sendcomms", name: "SendComms", configured: sendcomms.isConfigured(), balance: null }
   ];
   if (providers[0].configured) {
     try { const result = await reseller.getWalletBalance(); providers[0].balance = Number(result.balance ?? result.data?.balance); } catch (error) { providers[0].error = error.message; }
   }
   if (providers[1].configured) {
     try { const result = await remadata.getWalletBalance(); providers[1].balance = Number(result.balance ?? result.data?.balance?.balance ?? result.data?.balance); } catch (error) { providers[1].error = error.message; }
+  }
+  if (providers[2].configured) {
+    try { const result = await sendcomms.getWalletBalance(); providers[2].balance = Number(result.balance ?? result.data?.balance ?? result.data?.wallet?.balance); } catch (error) { providers[2].error = error.message; }
   }
   return res.json({ providers });
 });
@@ -231,17 +235,74 @@ router.get("/balances", async (req, res) => {
     if (remadata.isConfigured()) {
       try { const value = await remadata.getWalletBalance(); result.providers.push({ id: "remadata", amount: Number(value.balance ?? value.data?.balance?.balance ?? value.data?.balance) }); } catch (error) { result.providers.push({ id: "remadata", error: error.message }); }
     }
+      if (sendcomms.isConfigured()) {
+        try { const value = await sendcomms.getWalletBalance(); result.providers.push({ id: "sendcomms", amount: Number(value.balance ?? value.data?.balance ?? value.data?.wallet?.balance) }); } catch (error) { result.providers.push({ id: "sendcomms", error: error.message }); }
+      }
     return result;
   });
   providerResponse.providers.forEach((provider) => { balances[provider.id] = provider; });
   return res.json({ balances });
 });
 
+router.post("/data-retention/purge", async (req, res) => {
+  const confirmation = String(req.body?.confirmation || "").trim();
+  if (confirmation !== "DELETE ALL DATA") {
+    return res.status(400).json({ msg: "Type DELETE ALL DATA to confirm this action" });
+  }
+
+  const notice = "Admin deleted all transaction history and user accounts to save database space.";
+  try {
+    let deletedUsers = 0;
+    let deletedTransactions = 0;
+
+    if (isFallback(req)) {
+      deletedUsers = readUsers().length;
+      deletedTransactions = readTransactions().length;
+      writeUsers([]);
+      writeTransactions([]);
+      writeData("admin-settings.json", [{ key: "lastDataPurge", value: { notice, at: new Date().toISOString() } }]);
+    } else {
+      const [usersResult, transactionsResult] = await Promise.all([
+        User.deleteMany({}),
+        Transaction.deleteMany({})
+      ]);
+      deletedUsers = usersResult.deletedCount || 0;
+      deletedTransactions = transactionsResult.deletedCount || 0;
+      await AdminSetting.findOneAndUpdate(
+        { key: "lastDataPurge" },
+        { key: "lastDataPurge", value: { notice, at: new Date() }, updatedAt: new Date() },
+        { upsert: true }
+      );
+    }
+
+    return res.json({ msg: notice, deletedUsers, deletedTransactions });
+  } catch (error) {
+    console.error("DATA PURGE ERROR:", error.message);
+    return res.status(500).json({ msg: "Unable to delete account and transaction data" });
+  }
+});
+
 router.get("/comparison", async (req, res) => {
   try {
-    return res.json({ data: await reseller.getPlans(req.query.network), updatedAt: new Date().toISOString() });
+    const data = await reseller.getPlans(req.query.network);
+    return res.json({
+      data,
+      configuredProviders: {
+        resellerxpress: reseller.isConfigured(),
+        remadata: remadata.isConfigured(),
+        sendcomms: sendcomms.isConfigured()
+      },
+      updatedAt: new Date().toISOString()
+    });
   } catch (error) {
-    return res.status(500).json({ msg: "Unable to load provider comparison" });
+    return res.status(500).json({
+      msg: "Unable to load provider comparison",
+      configuredProviders: {
+        resellerxpress: reseller.isConfigured(),
+        remadata: remadata.isConfigured(),
+        sendcomms: sendcomms.isConfigured()
+      }
+    });
   }
 });
 

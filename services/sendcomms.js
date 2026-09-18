@@ -57,31 +57,38 @@ function getHeaders() {
 }
 
 function buildPlanRecord(plan, network) {
-  const price = Number(plan.price ?? plan.amount ?? plan.total ?? plan.api_price ?? 0);
+  const price = Number(plan.price ?? plan.amount ?? plan.total ?? plan.api_price ?? plan.sell_price ?? plan.cost ?? 0);
   const fee = Number(plan.fee ?? plan.handling_fee ?? plan.service_fee ?? plan.processing_fee ?? 0);
   const total = Number(plan.total ?? price + fee);
   const normalizedNetwork = normalizeNetwork(plan.network || network || "mtn");
-  const volumeGb = Number(plan.capacity_gb ?? (plan.capacity_mb !== undefined ? Number(plan.capacity_mb) / 1024 : plan.volume_gb ?? plan.volume ?? 0));
+  const rawVolume = plan.capacity_gb ?? plan.capacity_mb ?? plan.volume_gb ?? plan.volume ?? plan.data_size ?? plan.bundle_size ?? 0;
+  const volumeText = String(rawVolume).toLowerCase();
+  const volumeNumber = Number(String(rawVolume).replace(/[^0-9.]/g, ""));
+  const volumeGb = volumeText.includes("mb") || plan.capacity_mb !== undefined ? volumeNumber / 1024 : volumeNumber;
   const stableId = `sendcomms:${normalizedNetwork}:${volumeGb}`;
 
   return {
     ...plan,
-    id: plan.id ?? plan.plan_id ?? plan.slug ?? stableId,
-    name: plan.name ?? plan.plan_name ?? plan.bundle_name ?? `${plan.volume ?? plan.volume_mb ?? "Bundle"}`,
+    id: plan.id ?? plan.plan_id ?? plan.package_id ?? plan.slug ?? stableId,
+    name: plan.name ?? plan.plan_name ?? plan.bundle_name ?? plan.package_name ?? `${plan.volume ?? plan.volume_mb ?? "Bundle"}`,
     network: normalizedNetwork,
-    volume: plan.volume ?? plan.volume_mb ?? plan.capacity_gb ?? plan.capacity_mb ?? plan.data_size ?? plan.name ?? "Bundle",
+    volume: plan.volume ?? plan.volume_mb ?? plan.capacity_gb ?? plan.capacity_mb ?? plan.data_size ?? plan.bundle_size ?? plan.name ?? "Bundle",
     volumeGb,
     price,
     fee,
     total,
     amount: price,
     available: plan.in_stock !== false,
+    feeKnown: true,
+    feeSource: "provider",
     provider: "sendcomms"
   };
 }
 
 function parseRawPlans(payload) {
   if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.data?.packages)) return payload.data.packages;
+  if (Array.isArray(payload?.packages)) return payload.packages;
   if (Array.isArray(payload?.data)) return payload.data;
   if (Array.isArray(payload?.plans)) return payload.plans;
   if (Array.isArray(payload?.result)) return payload.result;
@@ -97,7 +104,7 @@ async function getBundles(network) {
   const response = await axios.get(`${getBaseUrl()}/data/packages`, {
     params: normalizedNetwork ? { network: normalizedNetwork } : {},
     headers: getHeaders(),
-    timeout: 2500
+    timeout: 10000
   });
 
   const networks = response.data?.data?.networks;

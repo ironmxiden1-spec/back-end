@@ -251,6 +251,21 @@ async function getPlans(network) {
   await loadPricingRules();
   const normalizedNetwork = normalizeNetwork(network) || network || "mtn";
 
+  // Use SendComms as the catalog when it is configured so the shop shows plans
+  // that can actually be delivered by the selected provider.
+  if (isSendCommsConfigured()) {
+    const sendcommsPlans = await getSendCommsPlans(normalizedNetwork);
+    if (sendcommsPlans.length > 0) {
+      return sendcommsPlans
+        .map((plan) => {
+          const pricing = calculateSellingPrice(Number(plan.total), Number(plan.volumeGb));
+          return pricing ? { ...plan, cost: Number(plan.total), sellingPrice: pricing.sellingPrice, expectedProfit: pricing.expectedProfit } : null;
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.total - b.total);
+    }
+  }
+
   const [resellerPlansResult, remadataPlansResult, sendcommsPlansResult] = await Promise.allSettled([
     getResellerPlans(normalizedNetwork),
     getRemaDataPlans(normalizedNetwork),

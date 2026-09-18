@@ -6,6 +6,19 @@ const axios = require("axios");
 const nodemailer = require("nodemailer");
 const { createId, isFallback, readUsers, writeUsers } = require("../utils/localStore");
 const { createAuthToken } = require("../utils/auth");
+const AdminSetting = require("../models/AdminSetting");
+const { readData } = require("../utils/fileDb");
+
+async function getDataPurgeNotice(req) {
+  try {
+    const record = isFallback(req)
+      ? (readData("admin-settings.json") || []).find((item) => item.key === "lastDataPurge")
+      : await AdminSetting.findOne({ key: "lastDataPurge" }).lean();
+    return record?.value?.notice || "";
+  } catch (error) {
+    return "";
+  }
+}
 
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString("hex");
@@ -136,7 +149,7 @@ router.post("/login", async (req, res) => {
       const users = readUsers();
       const user = users.find((item) => item.email.toLowerCase() === email);
       if (!user || !verifyPassword(password, user.password)) {
-        return res.status(400).json({ msg: "Invalid credentials" });
+        return res.status(400).json({ msg: "Invalid credentials", notice: await getDataPurgeNotice(req) });
       }
       if (!user.password.startsWith("scrypt:")) {
         user.password = hashPassword(password);
@@ -157,7 +170,7 @@ router.post("/login", async (req, res) => {
     }
 
     if (!user || !verifyPassword(password, user.password)) {
-      return res.status(400).json({ msg: "Invalid credentials" });
+      return res.status(400).json({ msg: "Invalid credentials", notice: await getDataPurgeNotice(req) });
     }
 
     if (user.password && !user.password.startsWith("scrypt:")) {

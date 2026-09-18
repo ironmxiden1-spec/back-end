@@ -273,13 +273,13 @@ router.post("/buy", async (req, res) => {
         return res.status(409).json({ msg: "Selected bundle is no longer available" });
       }
 
-      if (plan.purchasable === false || !/^\d+$/.test(String(plan.id))) {
+      if (plan.provider === "resellerxpress" && !/^\d+$/.test(String(plan.id))) {
         return res.status(503).json({
           msg: "Live bundle plans are temporarily unavailable. Please try again later."
         });
       }
 
-      if (plan.purchasable === false || !/^\d+$/.test(String(plan.id))) {
+      if (plan.purchasable === false) {
         return res.status(503).json({
           msg: "Live bundle plans are temporarily unavailable. Please try again later."
         });

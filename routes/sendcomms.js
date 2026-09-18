@@ -5,6 +5,7 @@ const {
   getBundles,
   buyData,
   getPurchaseStatus,
+  getWalletBalance,
   isConfigured
 } = require("../services/sendcomms");
 
@@ -55,10 +56,14 @@ router.get("/purchase-status", async (req, res) => {
 });
 
 router.get("/wallet-balance", async (req, res) => {
-  return res.status(501).json({
-    status: "unavailable",
-    message: "SendComms official data documentation does not provide a wallet-balance endpoint"
-  });
+  try {
+    return res.json(await getWalletBalance());
+  } catch (error) {
+    return res.status(error.response?.status === 404 ? 501 : 502).json({
+      status: "unavailable",
+      message: error.message || "SendComms wallet balance is unavailable"
+    });
+  }
 });
 
 module.exports = router;
