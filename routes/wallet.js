@@ -8,6 +8,7 @@ const { placeProviderOrder, getPlans, getFallbackPlans } = require("../services/
 const { createId, isFallback, readUsers, writeUsers, readTransactions, writeTransactions } = require("../utils/localStore");
 const { requireUser } = require("../utils/auth");
 const { normalizePhone, validatePhone } = require("../utils/phoneValidation");
+const { sendSms } = require("../services/sendcomms");
 
 router.use(requireUser);
 
@@ -288,6 +289,8 @@ router.post("/buy", async (req, res) => {
       const safeQuantity = Number.isFinite(quantity) && quantity > 0 ? quantity : 1;
       const requiredAmount = Number(plan.sellingPrice || 0) * safeQuantity;
       const providerCost = Number(plan.cost || plan.total || 0) * safeQuantity;
+      const providerFee = Number(plan.fee || 0) * safeQuantity;
+      const smsFee = Number(plan.smsFee || 0) * safeQuantity;
       const expectedProfit = Number(plan.expectedProfit || 0) * safeQuantity;
 
       if (!requiredAmount || plan.available === false || requiredAmount < providerCost) {
@@ -325,8 +328,9 @@ router.post("/buy", async (req, res) => {
       const tx = await Transaction.create({
         email,
         amount: requiredAmount,
-        providerCost,
-        providerFee: Number(plan.fee || 0) * safeQuantity,
+        providerCost: Number(plan.price || providerCost),
+        providerFee,
+        smsFee,
         expectedProfit,
         bundle: bundle || plan?.name || `${quantity} bundle(s)`,
         phone,
@@ -354,11 +358,24 @@ router.post("/buy", async (req, res) => {
         tx.status = confirmedDeliveryStatuses.includes(providerStatus)
           ? "completed"
           : providerStatus === "failed" ? "failed" : "pending";
-        tx.actualProfit = Number((requiredAmount - providerCost - Number(plan.fee || 0) * safeQuantity).toFixed(2));
+        tx.actualProfit = Number((requiredAmount - providerCost - providerFee - smsFee).toFixed(2));
         if (tx.status === "completed") tx.deliveredAt = new Date();
         // Keep the Paystack reference stable so a callback retry cannot deliver twice.
         if (!reference) tx.reference = result?.order?.request_id || requestId;
         await tx.save();
+
+        let smsSent = false;
+        if (tx.status === "completed") {
+          try {
+            const validityDays = Number(process.env.BUNDLE_VALIDITY_DAYS || 90);
+            const volume = Number(plan.volumeGb || plan.volume || 0);
+            const message = `WIMPS: Your account has been credited with ${volume ? `${volume}GB` : "your data bundle"} for ${phone}. It is valid for ${validityDays} days. Thank you.`;
+            await sendSms({ phone, message });
+            smsSent = true;
+          } catch (smsError) {
+            console.error("PURCHASE SMS ERROR:", smsError.response?.data || smsError.message);
+          }
+        }
 
         return res.json({
           msg: tx.status === "completed"
@@ -367,6 +384,7 @@ router.post("/buy", async (req, res) => {
               ? "The provider could not deliver this bundle"
               : "Payment accepted; your bundle is being delivered",
           balance: user.balance || 0,
+          smsSent,
           data: result
         });
       } catch (apiErr) {

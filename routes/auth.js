@@ -225,13 +225,22 @@ router.post("/forgot-password", async (req, res) => {
     const email = String(req.body?.email || "").trim().toLowerCase();
     if (!email) return res.status(400).json({ msg: "Email is required" });
 
-    const user = await User.findOne({ email });
+    const user = isFallback(req)
+      ? readUsers().find((item) => item.email.toLowerCase() === email)
+      : await User.findOne({ email });
     if (!user) return res.json({ msg: "If an account exists, a reset email has been sent" });
 
     const token = crypto.randomBytes(32).toString("hex");
     user.resetPasswordTokenHash = crypto.createHash("sha256").update(token).digest("hex");
     user.resetPasswordExpires = new Date(Date.now() + 30 * 60 * 1000);
-    await user.save();
+    if (isFallback(req)) {
+      const users = readUsers();
+      const index = users.findIndex((item) => item.email.toLowerCase() === email);
+      users[index] = user;
+      writeUsers(users);
+    } else {
+      await user.save();
+    }
 
     const baseUrl = process.env.FRONTEND_URL || "http://localhost:5500/front-end";
     await sendResetEmail(email, `${baseUrl}/reset-password.html?token=${token}&email=${encodeURIComponent(email)}`);
@@ -251,18 +260,24 @@ router.post("/reset-password", async (req, res) => {
     }
 
     const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
-    const user = await User.findOne({
-      email: String(email).trim().toLowerCase(),
-      resetPasswordTokenHash: tokenHash,
-      resetPasswordExpires: { $gt: new Date() }
-    });
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const user = isFallback(req)
+      ? readUsers().find((item) => item.email.toLowerCase() === normalizedEmail && item.resetPasswordTokenHash === tokenHash && new Date(item.resetPasswordExpires).getTime() > Date.now())
+      : await User.findOne({ email: normalizedEmail, resetPasswordTokenHash: tokenHash, resetPasswordExpires: { $gt: new Date() } });
 
     if (!user) return res.status(400).json({ msg: "Reset link is invalid or expired" });
 
     user.password = hashPassword(password);
     user.resetPasswordTokenHash = "";
     user.resetPasswordExpires = null;
-    await user.save();
+    if (isFallback(req)) {
+      const users = readUsers();
+      const index = users.findIndex((item) => item.email.toLowerCase() === normalizedEmail);
+      users[index] = user;
+      writeUsers(users);
+    } else {
+      await user.save();
+    }
 
     res.json({ msg: "Password changed successfully" });
   } catch (err) {

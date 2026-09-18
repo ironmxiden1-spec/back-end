@@ -12,6 +12,11 @@ function isConfigured() {
   return Boolean(getApiKey());
 }
 
+function getConfiguredSmsFee() {
+  const fee = Number(process.env.SMS_DELIVERY_FEE || 0);
+  return Number.isFinite(fee) && fee >= 0 ? fee : 0;
+}
+
 function normalizeNetwork(network) {
   if (!network) return null;
 
@@ -66,6 +71,49 @@ function getHeaders() {
         }
       : {})
   };
+}
+
+function parseSmsPrice(payload) {
+  const candidates = [
+    payload?.price,
+    payload?.amount,
+    payload?.cost,
+    payload?.data?.price,
+    payload?.data?.amount,
+    payload?.data?.cost,
+    payload?.data?.pricing?.price,
+    payload?.data?.pricing?.amount,
+    payload?.pricing?.price,
+    payload?.pricing?.amount
+  ];
+  const value = candidates.map(Number).find((item) => Number.isFinite(item) && item >= 0);
+  return value === undefined ? null : value;
+}
+
+async function getSmsPricing(phone) {
+  if (!isConfigured()) return { fee: getConfiguredSmsFee(), source: "configured_default" };
+  try {
+    const response = await axios.get(`${getBaseUrl()}/sms/pricing`, {
+      params: phone ? { phone } : { country_code: "233" },
+      headers: getHeaders(),
+      timeout: 5000
+    });
+    const fee = parseSmsPrice(response.data);
+    return { fee: fee === null ? getConfiguredSmsFee() : fee, source: fee === null ? "configured_default" : "sendcomms" };
+  } catch (error) {
+    return { fee: getConfiguredSmsFee(), source: "configured_default" };
+  }
+}
+
+async function sendSms({ phone, message }) {
+  if (!isConfigured()) throw new Error("SendComms SMS is not configured");
+  const payload = { to: phone, message };
+  if (process.env.SENDCOMMS_SENDER_ID) payload.from = process.env.SENDCOMMS_SENDER_ID;
+  const response = await axios.post(`${getBaseUrl()}${process.env.SENDCOMMS_SMS_SEND_PATH || "/sms/send"}`, payload, {
+    headers: getHeaders(),
+    timeout: 10000
+  });
+  return response.data;
 }
 
 function buildPlanRecord(plan, network) {
@@ -179,6 +227,9 @@ async function getPurchaseStatus({ transactionId, reference } = {}) {
 
 module.exports = {
   isConfigured,
+  getConfiguredSmsFee,
+  getSmsPricing,
+  sendSms,
   getBundles,
   buyData,
   getPurchaseStatus,

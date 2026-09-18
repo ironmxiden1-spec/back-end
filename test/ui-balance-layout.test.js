@@ -56,6 +56,16 @@ test('Google sign-in supports the fallback user store', () => {
   assert.ok(authSource.includes('writeUsers(users)'), 'Google sign-in must persist fallback users');
 });
 
+test('completed purchases include SMS notification and delivery fee wiring', () => {
+  const walletSource = fs.readFileSync(path.join(__dirname, '..', 'routes', 'wallet.js'), 'utf8');
+  const smsSource = fs.readFileSync(path.join(__dirname, '..', 'services', 'sendcomms.js'), 'utf8');
+  const pricingSource = fs.readFileSync(path.join(__dirname, '..', 'services', 'resellerxpress.js'), 'utf8');
+  assert.ok(walletSource.includes('if (tx.status === "completed")'), 'SMS must only send after confirmed delivery');
+  assert.ok(walletSource.includes('sendSms({ phone, message })'), 'completed purchases must send a confirmation SMS');
+  assert.ok(smsSource.includes('/sms/pricing'), 'SendComms pricing endpoint must be supported');
+  assert.ok(pricingSource.includes('getConfiguredSmsFee'), 'SMS delivery fee must be included in plan pricing');
+});
+
 test('resellerxpress plans should return a visible fallback list when upstream plans are empty', async () => {
   const { getPlans } = require('../services/resellerxpress');
   const plans = await getPlans('mtn');

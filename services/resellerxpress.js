@@ -1,7 +1,7 @@
 const axios = require("axios");
 const AdminSetting = require("../models/AdminSetting");
 const { getBundles: getRemaDataBundles, buyData: buyRemaData, isConfigured: isRemaDataConfigured } = require("./remadata");
-const { getBundles: getSendCommsBundles, buyData: buySendComms, isConfigured: isSendCommsConfigured } = require("./sendcomms");
+const { getBundles: getSendCommsBundles, buyData: buySendComms, isConfigured: isSendCommsConfigured, getConfiguredSmsFee, getSmsPricing } = require("./sendcomms");
 
 const DEFAULT_PROVIDER_FEE = Number(process.env.DEFAULT_PROVIDER_FEE || 0.5);
 let targetProfit = Number(process.env.TARGET_PROFIT || 1);
@@ -77,11 +77,13 @@ function getFallbackPlans(network) {
 
   return (samples[normalized] || samples.mtn).map((plan) => {
     const pricing = calculateSellingPrice(plan.total, plan.volumeGb);
+      const smsPricing = addSmsPricing({ volumeGb: plan.volumeGb }, plan.total);
     return {
       ...plan,
       cost: plan.total,
-      sellingPrice: pricing?.sellingPrice || Number((plan.total + targetProfit).toFixed(2)),
-      expectedProfit: pricing?.expectedProfit || targetProfit
+        smsFee: Number(smsPricing?.smsFee || 0),
+        sellingPrice: smsPricing?.sellingPrice || pricing?.sellingPrice || Number((plan.total + targetProfit).toFixed(2)),
+        expectedProfit: smsPricing?.expectedProfit || pricing?.expectedProfit || targetProfit
     };
   });
 }
@@ -108,6 +110,11 @@ function calculateSellingPrice(totalCost, volumeGb) {
   }
 
   return null;
+}
+
+function addSmsPricing(pricing, totalCost, smsFee = getConfiguredSmsFee()) {
+  const adjusted = calculateSellingPrice(Number(totalCost) + smsFee, pricing.volumeGb);
+  return adjusted ? { ...adjusted, smsFee } : null;
 }
 
 function normalizeNetwork(network) {
@@ -252,6 +259,7 @@ async function getSendCommsPlans(network) {
 async function getPlans(network) {
   await loadPricingRules();
   const normalizedNetwork = normalizeNetwork(network) || network || "mtn";
+  const smsPricing = await getSmsPricing();
 
   const [resellerPlansResult, remadataPlansResult, sendcommsPlansResult] = await Promise.allSettled([
     getResellerPlans(normalizedNetwork),
@@ -280,7 +288,7 @@ async function getPlans(network) {
       return;
     }
 
-    const pricing = calculateSellingPrice(Number(plan.total), Number(plan.volumeGb));
+    const pricing = addSmsPricing({ volumeGb: plan.volumeGb }, Number(plan.total), smsPricing.fee);
     if (!pricing) return;
 
     uniquePlans.push({
@@ -289,6 +297,7 @@ async function getPlans(network) {
       price: Number(plan.price || 0),
       fee: Number(plan.fee || 0),
       cost: Number(plan.total),
+      smsFee: Number(pricing.smsFee || 0),
       sellingPrice: pricing.sellingPrice,
       expectedProfit: pricing.expectedProfit
     });

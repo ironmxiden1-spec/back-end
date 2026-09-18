@@ -7,6 +7,7 @@ const TransactionSchema = new mongoose.Schema({
   amount: Number,
   providerCost: Number,
   providerFee: Number,
+  smsFee: Number,
   paymentFee: Number,
   expectedProfit: Number,
   actualProfit: Number,
