@@ -6,7 +6,7 @@ const { getBundles: getSendCommsBundles, buyData: buySendComms, isConfigured: is
 const DEFAULT_PROVIDER_FEE = Number(process.env.DEFAULT_PROVIDER_FEE || 0.5);
 let targetProfit = Number(process.env.TARGET_PROFIT || 1);
 let minimumProfit = Number(process.env.MINIMUM_PROFIT || 0.5);
-let maximumOneGbPrice = Number(process.env.MAXIMUM_1GB_PRICE || 6);
+let maximumOneGbPrice = Number(process.env.MAXIMUM_1GB_PRICE || 5);
 
 function getBaseUrl() {
   return process.env.RESSELLERXPRESS_BASE_URL || "https://resellerxpress.shop/api/v1";
@@ -107,6 +107,13 @@ function calculateSellingPrice(totalCost, volumeGb) {
     return {
       sellingPrice: Number(minimumPrice.toFixed(2)),
       expectedProfit: Number(minimumProfit.toFixed(2))
+    };
+  }
+
+  if (cost <= maximumOneGbPrice) {
+    return {
+      sellingPrice: Number(maximumOneGbPrice.toFixed(2)),
+      expectedProfit: Number((maximumOneGbPrice - cost).toFixed(2))
     };
   }
 
