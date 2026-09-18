@@ -1,10 +1,16 @@
 const express = require("express");
 const router = express.Router();
 const Transaction = require("../models/Transaction");
+const { requireUser } = require("../utils/auth");
+
+router.use(requireUser);
 
 // ===== GET USER TRANSACTIONS =====
 router.get("/:email", async (req, res) => {
   try {
+    if (req.params.email.toLowerCase() !== req.user.email.toLowerCase()) {
+      return res.status(403).json({ msg: "You can only access your own transactions" });
+    }
     const txs = await Transaction.find({ email: req.params.email });
     txs.sort((a, b) => new Date(b.date || b.createdAt || 0) - new Date(a.date || a.createdAt || 0));
 

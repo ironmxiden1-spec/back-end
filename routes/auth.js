@@ -5,7 +5,7 @@ const crypto = require("crypto");
 const axios = require("axios");
 const nodemailer = require("nodemailer");
 const { createId, isFallback, readUsers, writeUsers } = require("../utils/localStore");
-const { createAuthToken } = require("../utils/auth");
+const { createAuthToken, requireUser } = require("../utils/auth");
 const AdminSetting = require("../models/AdminSetting");
 const { readData } = require("../utils/fileDb");
 
@@ -37,11 +37,6 @@ function verifyPassword(password, storedPassword) {
   const actualHash = crypto.scryptSync(password, salt, 64).toString("hex");
   return crypto.timingSafeEqual(Buffer.from(actualHash, "hex"), Buffer.from(expectedHash, "hex"));
 }
-
-const DEMO_ACCOUNTS = {
-  "test@mail.com": { fullname: "Test User", password: "123456" },
-  "mark@gmail.com": { fullname: "mark nine", password: "123456" }
-};
 
 function publicUser(user) {
   return {
@@ -84,6 +79,10 @@ router.get("/config", (req, res) => {
     googleClientId: process.env.GOOGLE_CLIENT_ID || "",
     paystackPublicKey: process.env.PAYSTACK_PUBLIC_KEY || ""
   });
+});
+
+router.get("/session", requireUser, (req, res) => {
+  res.json({ authenticated: true, user: req.user });
 });
 
 // ===== REGISTER =====
@@ -158,16 +157,7 @@ router.post("/login", async (req, res) => {
       return res.json({ msg: "Login successful", user: publicUser(user) });
     }
 
-    let user = await User.findOne({ email });
-
-    if (!user && DEMO_ACCOUNTS[email]?.password === password) {
-      user = await User.create({
-        fullname: DEMO_ACCOUNTS[email].fullname,
-        email,
-        password: hashPassword(password),
-        balance: 0
-      });
-    }
+    const user = await User.findOne({ email });
 
     if (!user || !verifyPassword(password, user.password)) {
       return res.status(400).json({ msg: "Invalid credentials", notice: await getDataPurgeNotice(req) });
@@ -201,18 +191,26 @@ router.post("/google", async (req, res) => {
       return res.status(401).json({ msg: "Invalid Google account" });
     }
 
-    let user = await User.findOne({ email: profile.email.toLowerCase() });
-    if (!user) {
-      user = await User.create({
-        fullname: profile.name || profile.email.split("@")[0],
-        email: profile.email.toLowerCase(),
-        password: "",
-        googleId: profile.sub,
-        balance: 0
-      });
-    } else if (!user.googleId) {
-      user.googleId = profile.sub;
-      await user.save();
+    const email = profile.email.toLowerCase();
+    let user;
+    if (isFallback(req)) {
+      const users = readUsers();
+      user = users.find((item) => item.email.toLowerCase() === email);
+      if (!user) {
+        user = { id: createId(), fullname: profile.name || email.split("@")[0], email, password: "", googleId: profile.sub, balance: 0, createdAt: new Date().toISOString() };
+        users.push(user);
+      } else if (!user.googleId) {
+        user.googleId = profile.sub;
+      }
+      writeUsers(users);
+    } else {
+      user = await User.findOne({ email });
+      if (!user) {
+        user = await User.create({ fullname: profile.name || email.split("@")[0], email, password: "", googleId: profile.sub, balance: 0 });
+      } else if (!user.googleId) {
+        user.googleId = profile.sub;
+        await user.save();
+      }
     }
 
     res.json({ msg: "Google sign-in successful", user: publicUser(user) });

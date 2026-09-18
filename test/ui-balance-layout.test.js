@@ -43,6 +43,19 @@ test('admin routes should degrade to file-backed data when MongoDB is unavailabl
   assert.ok(adminRouteSource.includes('readData("transactions.json")'), 'orders and overview route should offer a file-backed fallback for the admin view');
 });
 
+test('deleted accounts cannot keep using old sessions or legacy demo logins', () => {
+  const authSource = fs.readFileSync(path.join(__dirname, '..', 'utils', 'auth.js'), 'utf8');
+  const loginSource = fs.readFileSync(path.join(__dirname, '..', 'routes', 'auth.js'), 'utf8');
+  assert.ok(authSource.includes('Your account no longer exists'), 'authenticated requests must reject deleted accounts');
+  assert.equal(loginSource.includes('DEMO_ACCOUNTS'), false, 'deleted demo accounts must not be recreated');
+});
+
+test('Google sign-in supports the fallback user store', () => {
+  const authSource = fs.readFileSync(path.join(__dirname, '..', 'routes', 'auth.js'), 'utf8');
+  assert.ok(authSource.includes('if (isFallback(req))'), 'Google sign-in must work when fallback storage is active');
+  assert.ok(authSource.includes('writeUsers(users)'), 'Google sign-in must persist fallback users');
+});
+
 test('resellerxpress plans should return a visible fallback list when upstream plans are empty', async () => {
   const { getPlans } = require('../services/resellerxpress');
   const plans = await getPlans('mtn');

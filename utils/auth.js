@@ -1,4 +1,6 @@
 const crypto = require("crypto");
+const User = require("../models/user");
+const { isFallback, readUsers } = require("./localStore");
 
 const TOKEN_TTL_SECONDS = 60 * 60 * 24 * 7;
 
@@ -45,11 +47,19 @@ function verifyAuthToken(token) {
   }
 }
 
-function requireUser(req, res, next) {
+async function requireUser(req, res, next) {
   const authorization = req.get("Authorization") || "";
   const token = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
   const user = verifyAuthToken(token);
   if (!user) return res.status(401).json({ msg: "Authentication required" });
+  try {
+    const exists = isFallback(req)
+      ? readUsers().some((item) => String(item.id) === user.sub && String(item.email).toLowerCase() === user.email)
+      : Boolean(await User.exists({ _id: user.sub, email: user.email }));
+    if (!exists) return res.status(401).json({ msg: "Your account no longer exists. Create a new account to continue." });
+  } catch (error) {
+    return res.status(503).json({ msg: "Unable to verify your account" });
+  }
   req.user = user;
   next();
 }
