@@ -3,7 +3,6 @@ const router = express.Router();
 const User = require("../models/user");
 const crypto = require("crypto");
 const axios = require("axios");
-const nodemailer = require("nodemailer");
 const { createId, isFallback, readUsers, writeUsers } = require("../utils/localStore");
 const { createAuthToken, requireUser } = require("../utils/auth");
 const AdminSetting = require("../models/AdminSetting");
@@ -48,30 +47,6 @@ function publicUser(user) {
     googleId: user.googleId || "",
     authToken: createAuthToken(user)
   };
-}
-
-function getMailer() {
-  if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) return null;
-
-  return nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT || 587),
-    secure: String(process.env.SMTP_SECURE).toLowerCase() === "true",
-    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
-  });
-}
-
-async function sendResetEmail(email, resetUrl) {
-  const mailer = getMailer();
-  if (!mailer) throw new Error("Password reset email is not configured");
-
-  await mailer.sendMail({
-    from: process.env.SMTP_FROM || process.env.SMTP_USER,
-    to: email,
-    subject: "Reset your WIMPS password",
-    text: `Use this link to change your WIMPS password. It expires in 30 minutes:\n\n${resetUrl}`,
-    html: `<p>Use the link below to change your WIMPS password. It expires in 30 minutes.</p><p><a href="${resetUrl}">Reset password</a></p>`
-  });
 }
 
 router.get("/config", (req, res) => {
@@ -217,72 +192,6 @@ router.post("/google", async (req, res) => {
   } catch (err) {
     console.error("GOOGLE AUTH ERROR:", err.response?.data || err.message);
     res.status(401).json({ msg: "Google sign-in failed" });
-  }
-});
-
-router.post("/forgot-password", async (req, res) => {
-  try {
-    const email = String(req.body?.email || "").trim().toLowerCase();
-    if (!email) return res.status(400).json({ msg: "Email is required" });
-
-    const user = isFallback(req)
-      ? readUsers().find((item) => item.email.toLowerCase() === email)
-      : await User.findOne({ email });
-    if (!user) return res.json({ msg: "If an account exists, a reset email has been sent" });
-
-    const token = crypto.randomBytes(32).toString("hex");
-    user.resetPasswordTokenHash = crypto.createHash("sha256").update(token).digest("hex");
-    user.resetPasswordExpires = new Date(Date.now() + 30 * 60 * 1000);
-    if (isFallback(req)) {
-      const users = readUsers();
-      const index = users.findIndex((item) => item.email.toLowerCase() === email);
-      users[index] = user;
-      writeUsers(users);
-    } else {
-      await user.save();
-    }
-
-    const baseUrl = process.env.FRONTEND_URL || "http://localhost:5500/front-end";
-    await sendResetEmail(email, `${baseUrl}/reset-password.html?token=${token}&email=${encodeURIComponent(email)}`);
-
-    res.json({ msg: "If an account exists, a reset email has been sent" });
-  } catch (err) {
-    console.error("FORGOT PASSWORD ERROR:", err.message);
-    res.status(503).json({ msg: "Password reset email is currently unavailable" });
-  }
-});
-
-router.post("/reset-password", async (req, res) => {
-  try {
-    const { email, token, password } = req.body || {};
-    if (!email || !token || !password || password.length < 6) {
-      return res.status(400).json({ msg: "Email, token, and a password of at least 6 characters are required" });
-    }
-
-    const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
-    const normalizedEmail = String(email).trim().toLowerCase();
-    const user = isFallback(req)
-      ? readUsers().find((item) => item.email.toLowerCase() === normalizedEmail && item.resetPasswordTokenHash === tokenHash && new Date(item.resetPasswordExpires).getTime() > Date.now())
-      : await User.findOne({ email: normalizedEmail, resetPasswordTokenHash: tokenHash, resetPasswordExpires: { $gt: new Date() } });
-
-    if (!user) return res.status(400).json({ msg: "Reset link is invalid or expired" });
-
-    user.password = hashPassword(password);
-    user.resetPasswordTokenHash = "";
-    user.resetPasswordExpires = null;
-    if (isFallback(req)) {
-      const users = readUsers();
-      const index = users.findIndex((item) => item.email.toLowerCase() === normalizedEmail);
-      users[index] = user;
-      writeUsers(users);
-    } else {
-      await user.save();
-    }
-
-    res.json({ msg: "Password changed successfully" });
-  } catch (err) {
-    console.error("RESET PASSWORD ERROR:", err.message);
-    res.status(500).json({ msg: "Unable to change password" });
   }
 });
 
