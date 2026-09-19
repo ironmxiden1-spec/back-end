@@ -49,6 +49,22 @@ async function verifyPaystackReference(reference) {
   }
 }
 
+async function refundPaystackReference(reference) {
+  if (!reference || !process.env.PAYSTACK_SECRET_KEY) return false;
+
+  try {
+    await axios.post(
+      "https://api.paystack.co/refund",
+      { transaction: reference },
+      { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } }
+    );
+    return true;
+  } catch (error) {
+    console.error("PAYSTACK REFUND ERROR:", error.response?.data || error.message);
+    return false;
+  }
+}
+
 function validatePayment(paymentData, expectedAmount) {
   const expected = Number(expectedAmount);
   const paidAmount = Number(paymentData.amount || 0) / 100;
@@ -59,6 +75,13 @@ function validatePayment(paymentData, expectedAmount) {
   if (currency && currency !== "GHS") return "Payment currency mismatch";
   if (Math.abs(paidAmount - expected) > 0.01) return "Amount mismatch";
   return null;
+}
+
+function formatBundleLabel(plan) {
+  const volumeGb = Number(plan?.volumeGb);
+  if (!Number.isFinite(volumeGb) || volumeGb <= 0) return plan?.name || "Data bundle";
+  const volume = volumeGb < 1 ? `${Math.round(volumeGb * 1024)}MB` : `${Number.isInteger(volumeGb) ? volumeGb : volumeGb.toFixed(2)}GB`;
+  return `${volume} ${plan.network || ""}`.trim();
 }
 
 // ==========================
@@ -227,7 +250,8 @@ router.post("/buy", async (req, res) => {
       }
 
       const transaction = {
-        _id: createId(), email, amount: requiredAmount, bundle: bundle || plan.name,
+        _id: createId(), email, type: "purchase", network: plan.network, provider: plan.provider,
+        amount: requiredAmount, bundle: bundle || formatBundleLabel(plan),
         phone, paymentMethod: reference ? "paystack" : "wallet",
         status: reference ? "pending" : "completed", reference: reference || createId(),
         date: new Date().toISOString()
@@ -327,12 +351,15 @@ router.post("/buy", async (req, res) => {
 
       const tx = await Transaction.create({
         email,
+        type: "purchase",
+        network: plan.network,
+        provider: plan.provider,
         amount: requiredAmount,
         providerCost: Number(plan.price || providerCost),
         providerFee,
         smsFee,
         expectedProfit,
-        bundle: bundle || plan?.name || `${quantity} bundle(s)`,
+        bundle: bundle || formatBundleLabel(plan),
         phone,
         paymentMethod: reference ? "paystack" : "wallet",
         status: "pending",
@@ -340,14 +367,44 @@ router.post("/buy", async (req, res) => {
       });
 
       try {
-        const result = await placeProviderOrder(plan.provider, {
-          plan_id: planId,
-          phone,
-          network: plan.network,
-          volumeGb: plan.volumeGb || plan.volume,
-          request_id: requestId,
-          quantity
-        });
+        let providerPlan = plan;
+        let result;
+        try {
+          result = await placeProviderOrder(providerPlan.provider, {
+            plan_id: providerPlan.id,
+            phone,
+            network: providerPlan.network,
+            volumeGb: providerPlan.volumeGb || providerPlan.volume,
+            request_id: requestId,
+            quantity
+          });
+        } catch (firstProviderError) {
+          const alternatives = await getPlans(providerPlan.network, { allProviders: true, ignoreProviderSelection: true });
+          const targetVolume = Number(providerPlan.volumeGb);
+          const alternative = alternatives.find((candidate) => candidate.provider !== providerPlan.provider
+            && Math.abs(Number(candidate.volumeGb) - targetVolume) < 0.001
+            && candidate.available !== false
+            && candidate.purchasable !== false);
+
+          if (!alternative) throw firstProviderError;
+
+          providerPlan = alternative;
+          result = await placeProviderOrder(providerPlan.provider, {
+            plan_id: providerPlan.id,
+            phone,
+            network: providerPlan.network,
+            volumeGb: providerPlan.volumeGb || providerPlan.volume,
+            request_id: requestId,
+            quantity
+          });
+          tx.providerCost = Number(providerPlan.price || providerPlan.cost || providerPlan.total || providerCost);
+          tx.providerFee = Number(providerPlan.fee || providerFee);
+          tx.smsFee = Number(providerPlan.smsFee || smsFee);
+          tx.expectedProfit = Number(providerPlan.expectedProfit || expectedProfit);
+          tx.network = providerPlan.network;
+          tx.provider = providerPlan.provider;
+          tx.bundle = bundle || providerPlan.name || `${quantity} bundle(s)`;
+        }
 
         const providerStatus = String(
           result?.data?.delivery_status || result?.data?.fulfillment_status ||
@@ -358,7 +415,7 @@ router.post("/buy", async (req, res) => {
         tx.status = confirmedDeliveryStatuses.includes(providerStatus)
           ? "completed"
           : providerStatus === "failed" ? "failed" : "pending";
-        tx.actualProfit = Number((requiredAmount - providerCost - providerFee - smsFee).toFixed(2));
+        tx.actualProfit = Number((requiredAmount - Number(tx.providerCost || providerCost) - Number(tx.providerFee || providerFee) - Number(tx.smsFee || smsFee)).toFixed(2));
         if (tx.status === "completed") tx.deliveredAt = new Date();
         // Keep the Paystack reference stable so a callback retry cannot deliver twice.
         if (!reference) tx.reference = result?.order?.request_id || requestId;
@@ -368,7 +425,7 @@ router.post("/buy", async (req, res) => {
         if (tx.status === "completed") {
           try {
             const validityDays = Number(process.env.BUNDLE_VALIDITY_DAYS || 90);
-            const volume = Number(plan.volumeGb || plan.volume || 0);
+            const volume = Number(providerPlan.volumeGb || providerPlan.volume || 0);
             const message = `WIMPS: Your account has been credited with ${volume ? `${volume}GB` : "your data bundle"} for ${phone}. It is valid for ${validityDays} days. Thank you.`;
             await sendSms({ phone, message });
             smsSent = true;
@@ -390,7 +447,9 @@ router.post("/buy", async (req, res) => {
       } catch (apiErr) {
         console.error("RESELLERXPRESS ERROR:", apiErr.response?.data || apiErr.message);
 
-        tx.status = "failed";
+        tx.status = reference ? "refunded" : "failed";
+        tx.actualProfit = 0;
+        const refunded = reference ? await refundPaystackReference(reference) : true;
         await tx.save();
 
         if (!reference) {
@@ -398,8 +457,12 @@ router.post("/buy", async (req, res) => {
           await user.save();
         }
 
-        return res.status(500).json({
-          msg: apiErr.response?.data?.message || apiErr.message || "ResellerXpress delivery failed, refunded"
+        return res.status(502).json({
+          msg: reference
+            ? refunded
+              ? "Bundle delivery failed. Your Paystack payment has been refunded."
+              : "Bundle delivery failed. The refund could not be completed automatically; support will review it."
+            : apiErr.response?.data?.message || apiErr.message || "Bundle delivery failed and your wallet was refunded"
         });
       }
     }

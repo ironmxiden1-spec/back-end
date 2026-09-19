@@ -4,6 +4,8 @@ const TransactionSchema = new mongoose.Schema({
   email: String,
   type: String, // deposit | purchase
   bundle: String,
+  network: String,
+  provider: String,
   amount: Number,
   providerCost: Number,
   providerFee: Number,

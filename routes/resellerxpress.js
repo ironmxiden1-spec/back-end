@@ -1,5 +1,7 @@
 const express = require("express");
 const router = express.Router();
+const plansCache = new Map();
+const PLANS_CACHE_MS = 15000;
 
 const {
   getPlans,
@@ -22,11 +24,18 @@ router.get("/health", (req, res) => {
 });
 
 router.get("/plans", async (req, res) => {
+  const network = String(req.query.network || "mtn").toLowerCase();
+  const cached = plansCache.get(network);
+  if (cached && Date.now() - cached.updatedAt < PLANS_CACHE_MS) {
+    return res.json(cached.data);
+  }
+
   try {
     if (req.app.locals.dbReady === false) {
       return res.json(getFallbackPlans(req.query.network));
     }
-    const result = await getPlans(req.query.network);
+    const result = await getPlans(req.query.network, { includeUnavailable: true });
+    plansCache.set(network, { data: result, updatedAt: Date.now() });
     return res.json(result);
   } catch (error) {
     return res.status(500).json({

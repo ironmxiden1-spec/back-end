@@ -7,6 +7,7 @@ const DEFAULT_PROVIDER_FEE = Number(process.env.DEFAULT_PROVIDER_FEE || 0.5);
 let targetProfit = Number(process.env.TARGET_PROFIT || 1);
 let minimumProfit = Number(process.env.MINIMUM_PROFIT || 0.5);
 let maximumOneGbPrice = Number(process.env.MAXIMUM_1GB_PRICE || 5);
+let selectedProvider = "";
 
 function getBaseUrl() {
   return process.env.RESSELLERXPRESS_BASE_URL || "https://resellerxpress.shop/api/v1";
@@ -20,11 +21,14 @@ function configurePricingRules(settings = {}) {
   if (Number.isFinite(Number(settings.targetProfit))) targetProfit = Number(settings.targetProfit);
   if (Number.isFinite(Number(settings.minimumProfit))) minimumProfit = Number(settings.minimumProfit);
   if (Number.isFinite(Number(settings.maxOneGb))) maximumOneGbPrice = Number(settings.maxOneGb);
+  if (["", "resellerxpress", "remadata", "sendcomms"].includes(String(settings.selectedProvider ?? ""))) {
+    selectedProvider = String(settings.selectedProvider ?? "");
+  }
 }
 
 async function loadPricingRules() {
   try {
-    const records = await AdminSetting.find({ key: { $in: ["targetProfit", "minimumProfit", "maxOneGb"] } }).lean();
+    const records = await AdminSetting.find({ key: { $in: ["targetProfit", "minimumProfit", "maxOneGb", "selectedProvider"] } }).lean();
     configurePricingRules(Object.fromEntries(records.map((record) => [record.key, record.value])));
   } catch (error) {
     // Environment defaults remain active when the database is unavailable.
@@ -149,12 +153,12 @@ function normalizePlanRecord(plan, network, provider) {
     : DEFAULT_PROVIDER_FEE;
   const total = hasFee ? Number(plan.total ?? price + fee) : price + fee;
   const normalizedNetwork = normalizeNetwork(plan.network || network || "mtn");
-  const rawVolume = plan.volume_gb ?? plan.volume ?? plan.volume_mb ?? plan.volumeInMB ?? plan.capacity_gb ?? plan.capacity_mb;
-  const volumeNumber = Number(String(rawVolume ?? "").replace(/[^0-9.]/g, ""));
-  const volumeUnit = String(rawVolume ?? "").toLowerCase();
+  const rawVolume = plan.volume_gb ?? plan.capacity_gb ?? plan.volume ?? plan.volume_mb ?? plan.volumeInMB ?? plan.capacity_mb ?? plan.capacity ?? plan.bundle_size ?? plan.data_size ?? plan.name;
+  const volumeText = String(rawVolume ?? "").trim().toLowerCase();
+  const volumeNumber = Number(volumeText.replace(/[^0-9.]/g, ""));
   const volumeGb = plan.volume_gb !== undefined || plan.capacity_gb !== undefined
     ? volumeNumber
-    : volumeUnit.includes("mb") || plan.volume_mb !== undefined || plan.volumeInMB !== undefined || plan.capacity_mb !== undefined
+    : plan.volume_mb !== undefined || plan.volumeInMB !== undefined || plan.capacity_mb !== undefined || volumeText.includes("mb")
       ? volumeNumber / 1024
       : volumeNumber;
   const stableId = `${provider || "provider"}:${normalizedNetwork}:${volumeGb}`;
@@ -162,7 +166,7 @@ function normalizePlanRecord(plan, network, provider) {
   return {
     ...plan,
     id: plan.id ?? plan.plan_id ?? plan.slug ?? stableId,
-    name: plan.name ?? plan.plan_name ?? plan.bundle_name ?? `${plan.volume ?? plan.volume_mb ?? "Bundle"}`,
+    name: plan.name ?? plan.plan_name ?? plan.bundle_name ?? `${plan.volume ?? plan.volume_mb ?? plan.capacity ?? "Bundle"}`,
     network: normalizedNetwork,
     volume: rawVolume ?? plan.data_size ?? plan.name ?? "Bundle",
     volumeGb,
@@ -170,7 +174,7 @@ function normalizePlanRecord(plan, network, provider) {
     fee,
     total,
     amount: price,
-    available: plan.available !== false && plan.in_stock !== false,
+    available: plan.available !== false && plan.in_stock !== false && plan.stock !== false,
     feeKnown: true,
     feeSource: hasFee ? "provider" : "configured_default",
     provider: provider || plan.provider || "resellerxpress"
@@ -268,7 +272,7 @@ async function getSendCommsPlans(network) {
   }
 }
 
-async function getPlans(network) {
+async function getPlans(network, options = {}) {
   await loadPricingRules();
   const normalizedNetwork = normalizeNetwork(network) || network || "mtn";
   const smsPricing = await getSmsPricing();
@@ -296,7 +300,18 @@ async function getPlans(network) {
     }
 
     seen.add(uniqueKey);
-    if (plan.available === false || !plan.feeKnown || !Number.isFinite(Number(plan.total)) || Number(plan.total) <= 0) {
+    if (!Number.isFinite(Number(plan.volumeGb)) || Number(plan.volumeGb) < 1) {
+      return;
+    }
+    if (!plan.feeKnown || !Number.isFinite(Number(plan.total)) || Number(plan.total) <= 0) {
+      if (options.includeUnavailable && plan.available === false) {
+        uniquePlans.push({ ...plan, sellingPrice: 0, expectedProfit: 0, purchasable: false });
+      }
+      return;
+    }
+
+    if (plan.available === false) {
+      if (options.includeUnavailable) uniquePlans.push({ ...plan, sellingPrice: 0, expectedProfit: 0, purchasable: false });
       return;
     }
 
@@ -311,6 +326,7 @@ async function getPlans(network) {
       cost: Number(plan.total),
       smsFee: Number(pricing.smsFee || 0),
       sellingPrice: pricing.sellingPrice,
+      purchasable: true,
       expectedProfit: pricing.expectedProfit
     });
   });
@@ -318,16 +334,46 @@ async function getPlans(network) {
   if (uniquePlans.length === 0) {
     return getFallbackPlans(normalizedNetwork).map((plan) => ({
       ...plan,
+      ...(options.includeUnavailable ? { available: false, purchasable: false, sellingPrice: 0 } : {}),
       cost: Number(plan.total || 0),
       price: Number(plan.price || 0),
       fee: Number(plan.fee || 0),
-      sellingPrice: Number(plan.sellingPrice || plan.price || 0),
+      sellingPrice: options.includeUnavailable ? 0 : Number(plan.sellingPrice || plan.price || 0),
       expectedProfit: Number(plan.expectedProfit || 0)
     }));
   }
 
+  const providerFiltered = selectedProvider && options.ignoreProviderSelection !== true
+    ? uniquePlans.filter((plan) => plan.provider === selectedProvider)
+    : uniquePlans;
+
+  if (options.includeUnavailable) {
+    const knownVolumes = new Set(providerFiltered.map((plan) => Number(plan.volumeGb).toFixed(3)));
+    [1, 2, 3, 5, 10].forEach((volumeGb) => {
+      if (knownVolumes.has(volumeGb.toFixed(3))) return;
+      providerFiltered.push({
+        id: `out-of-stock-${normalizedNetwork}-${volumeGb}gb`,
+        name: `${volumeGb < 1 ? Math.round(volumeGb * 1024) + "MB" : volumeGb + "GB"} ${normalizedNetwork} Bundle`,
+        network: normalizedNetwork,
+        provider: selectedProvider || "provider",
+        volume: `${volumeGb}GB`,
+        volumeGb,
+        price: 0,
+        total: 0,
+        cost: 0,
+        sellingPrice: 0,
+        expectedProfit: 0,
+        available: false,
+        purchasable: false,
+        feeKnown: true
+      });
+    });
+  }
+
+  if (options.allProviders) return providerFiltered.sort((a, b) => a.total - b.total);
+
   const cheapestByBundle = new Map();
-  uniquePlans.forEach((plan) => {
+  providerFiltered.forEach((plan) => {
     const volumeGb = Number(plan.volumeGb);
     if (!Number.isFinite(volumeGb) || volumeGb <= 0) return;
     const key = `${plan.network}:${volumeGb}`;

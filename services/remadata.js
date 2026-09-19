@@ -180,7 +180,7 @@ async function getWalletBalance() {
     throw new Error("RemaData API key is not configured");
   }
 
-  const response = await axios.get(`${BASE_URL}/wallet-balance`, {
+  const response = await axios.get(`${getBaseUrl()}/wallet-balance`, {
     headers: getHeaders()
   });
 

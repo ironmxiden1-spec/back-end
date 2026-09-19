@@ -123,7 +123,7 @@ function buildPlanRecord(plan, network) {
   const fee = Number(plan.fee ?? plan.handling_fee ?? plan.service_fee ?? plan.processing_fee ?? 0);
   const total = Number.isFinite(providerPrice) && providerPrice > 0 ? providerPrice + fee : Number(plan.total ?? price + fee);
   const normalizedNetwork = normalizeNetwork(plan.network || network || "mtn");
-  const rawVolume = plan.capacity_gb ?? plan.capacity_mb ?? plan.volume_gb ?? plan.volume ?? plan.data_size ?? plan.bundle_size ?? 0;
+  const rawVolume = plan.capacity_gb ?? plan.volume_gb ?? plan.capacity_mb ?? plan.volume ?? plan.data_size ?? plan.bundle_size ?? plan.name ?? 0;
   const volumeText = String(rawVolume).toLowerCase();
   const volumeNumber = Number(String(rawVolume).replace(/[^0-9.]/g, ""));
   const volumeGb = plan.capacity_gb !== undefined || plan.volume_gb !== undefined
@@ -225,6 +225,16 @@ async function getPurchaseStatus({ transactionId, reference } = {}) {
   return response.data;
 }
 
+async function getWalletBalance() {
+  if (!isConfigured()) throw new Error("SendComms API key or base URL is not configured");
+
+  const response = await axios.get(`${getBaseUrl()}${process.env.SENDCOMMS_WALLET_BALANCE_PATH || "/wallet/balance"}`, {
+    headers: getHeaders(),
+    timeout: 10000
+  });
+  return response.data;
+}
+
 module.exports = {
   isConfigured,
   getConfiguredSmsFee,
@@ -233,5 +243,6 @@ module.exports = {
   getBundles,
   buyData,
   getPurchaseStatus,
+  getWalletBalance,
   normalizePurchaseInput
 };

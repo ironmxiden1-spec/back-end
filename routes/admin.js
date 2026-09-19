@@ -158,12 +158,15 @@ router.get("/settings", async (req, res) => {
 
 router.put("/settings", async (req, res) => {
   try {
-    const allowed = ["targetProfit", "minimumProfit", "maxOneGb", "neverBelowCost", "autoProvider"];
+    const allowed = ["targetProfit", "minimumProfit", "maxOneGb", "neverBelowCost", "autoProvider", "selectedProvider"];
     const updates = {};
     for (const key of allowed) {
       if (req.body?.[key] !== undefined) {
-        const value = ["neverBelowCost", "autoProvider"].includes(key) ? Boolean(req.body[key]) : Number(req.body[key]);
-        if (!["neverBelowCost", "autoProvider"].includes(key) && (!Number.isFinite(value) || value < 0)) return res.status(400).json({ msg: `Invalid setting: ${key}` });
+        const value = ["neverBelowCost", "autoProvider"].includes(key)
+          ? Boolean(req.body[key])
+          : key === "selectedProvider" ? String(req.body[key] || "") : Number(req.body[key]);
+        if (key !== "selectedProvider" && !["neverBelowCost", "autoProvider"].includes(key) && (!Number.isFinite(value) || value < 0)) return res.status(400).json({ msg: `Invalid setting: ${key}` });
+        if (key === "selectedProvider" && !["", "resellerxpress", "remadata", "sendcomms"].includes(value)) return res.status(400).json({ msg: `Invalid setting: ${key}` });
         await AdminSetting.findOneAndUpdate({ key }, { key, value, updatedAt: new Date() }, { upsert: true, new: true });
         if (key === "targetProfit" || key === "minimumProfit" || key === "maxOneGb") reseller.configurePricingRules({ [key]: value });
         updates[key] = value;
@@ -287,7 +290,7 @@ router.post("/data-retention/purge", async (req, res) => {
 
 router.get("/comparison", async (req, res) => {
   try {
-    const data = await reseller.getPlans(req.query.network);
+    const data = await reseller.getPlans(req.query.network, { allProviders: true, ignoreProviderSelection: true });
     return res.json({
       data,
       configuredProviders: {
