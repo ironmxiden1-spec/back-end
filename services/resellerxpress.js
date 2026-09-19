@@ -147,7 +147,7 @@ function normalizeNetwork(network) {
 
 function normalizePlanRecord(plan, network, provider) {
   const hasFee = ["fee", "handling_fee", "service_fee", "processing_fee"].some((key) => plan[key] !== undefined && plan[key] !== null);
-  const price = Number(plan.price ?? plan.amount ?? plan.total ?? 0);
+  const price = Number(plan.price?.amount ?? plan.price ?? plan.api_price ?? plan.amount ?? plan.total ?? plan.sell_price ?? plan.provider_price?.amount ?? 0);
   const fee = hasFee
     ? Number(plan.fee ?? plan.handling_fee ?? plan.service_fee ?? plan.processing_fee)
     : DEFAULT_PROVIDER_FEE;
@@ -174,7 +174,9 @@ function normalizePlanRecord(plan, network, provider) {
     fee,
     total,
     amount: price,
-    available: plan.available !== false && plan.in_stock !== false && plan.stock !== false,
+    available: ![false, "false", "inactive", "disabled", "out_of_stock", "unavailable"].includes(plan.available)
+      && ![false, "false", "inactive", "disabled", "out_of_stock", "unavailable"].includes(plan.status)
+      && plan.in_stock !== false && plan.stock !== false,
     feeKnown: true,
     feeSource: hasFee ? "provider" : "configured_default",
     provider: provider || plan.provider || "resellerxpress"
@@ -230,6 +232,10 @@ async function getRemaDataPlans(network) {
       ? response
       : Array.isArray(response?.data)
         ? response.data
+        : Array.isArray(response?.data?.bundles)
+          ? response.data.bundles
+          : Array.isArray(response?.bundles)
+            ? response.bundles
         : Array.isArray(response?.plans)
           ? response.plans
           : Array.isArray(response?.result)

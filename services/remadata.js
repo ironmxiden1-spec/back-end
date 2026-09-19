@@ -9,7 +9,7 @@ function getApiKey() {
 }
 
 function isConfigured() {
-  return Boolean(getApiKey());
+  return Boolean(getApiKey().trim());
 }
 
 function getHeaders() {
