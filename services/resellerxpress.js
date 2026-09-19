@@ -156,7 +156,7 @@ function normalizePlanRecord(plan, network, provider) {
   const rawVolume = plan.volume_gb ?? plan.capacity_gb ?? plan.volume ?? plan.volume_mb ?? plan.volumeInMB ?? plan.capacity_mb ?? plan.capacity ?? plan.bundle_size ?? plan.data_size ?? plan.name;
   const volumeText = String(rawVolume ?? "").trim().toLowerCase();
   const volumeNumber = Number(volumeText.replace(/[^0-9.]/g, ""));
-  const volumeGb = plan.volume_gb !== undefined || plan.capacity_gb !== undefined
+  const volumeGb = plan.volume_gb !== undefined || plan.capacity_gb !== undefined || volumeText.includes("gb")
     ? volumeNumber
     : plan.volume_mb !== undefined || plan.volumeInMB !== undefined || plan.capacity_mb !== undefined || volumeText.includes("mb")
       ? volumeNumber / 1024
@@ -281,6 +281,21 @@ async function getSendCommsPlans(network) {
 async function getPlans(network, options = {}) {
   await loadPricingRules();
   const normalizedNetwork = normalizeNetwork(network) || network || "mtn";
+
+  const requestedProvider = selectedProvider && options.ignoreProviderSelection !== true ? selectedProvider : "";
+  if (requestedProvider === "remadata") {
+    const remaPlans = await getRemaDataPlans(normalizedNetwork);
+    return buildVisiblePlans(remaPlans, normalizedNetwork, getConfiguredSmsFee(), options);
+  }
+  if (requestedProvider === "sendcomms") {
+    const sendPlans = await getSendCommsPlans(normalizedNetwork);
+    return buildVisiblePlans(sendPlans, normalizedNetwork, getConfiguredSmsFee(), options);
+  }
+  if (requestedProvider === "resellerxpress") {
+    const resellerPlans = await getResellerPlans(normalizedNetwork);
+    return buildVisiblePlans(resellerPlans, normalizedNetwork, getConfiguredSmsFee(), options);
+  }
+
   const smsPricing = await getSmsPricing();
 
   const [resellerPlansResult, remadataPlansResult, sendcommsPlansResult] = await Promise.allSettled([
@@ -295,6 +310,10 @@ async function getPlans(network, options = {}) {
 
   const combined = [...resellerPlans, ...remadataPlans, ...sendcommsPlans];
 
+  return buildVisiblePlans(combined, normalizedNetwork, smsPricing.fee, options);
+}
+
+function buildVisiblePlans(combined, normalizedNetwork, smsFee, options = {}) {
   const uniquePlans = [];
   const seen = new Set();
 
@@ -321,8 +340,20 @@ async function getPlans(network, options = {}) {
       return;
     }
 
-    const pricing = addSmsPricing({ volumeGb: plan.volumeGb }, Number(plan.total), smsPricing.fee);
-    if (!pricing) return;
+    const pricing = addSmsPricing({ volumeGb: plan.volumeGb }, Number(plan.total), smsFee);
+    if (!pricing) {
+      const visibleCost = Number((Number(plan.total) + Number(smsFee || 0)).toFixed(2));
+      uniquePlans.push({
+        ...plan,
+        cost: Number(plan.total),
+        smsFee: Number(smsFee || 0),
+        sellingPrice: visibleCost,
+        expectedProfit: 0,
+        purchasable: true,
+        pricingWarning: "Displayed at provider cost because the configured price cap would make this bundle unavailable."
+      });
+      return;
+    }
 
     uniquePlans.push({
       ...plan,

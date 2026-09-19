@@ -114,7 +114,7 @@ async function getBundles(network) {
   const response = await axios.get(url, {
     params,
     headers: getHeaders(),
-    timeout: 2500
+    timeout: 10000
   });
 
   return response.data;
