@@ -5,7 +5,7 @@ const Transaction = require("../models/Transaction");
 const AdminSetting = require("../models/AdminSetting");
 const reseller = require("../services/resellerxpress");
 const remadata = require("../services/remadata");
-const sendcomms = require("../services/sendcomms");
+const reloadly = require("../services/reloadly");
 const { readData, writeData } = require("../utils/fileDb");
 const { isFallback, readUsers, writeUsers, readTransactions, writeTransactions } = require("../utils/localStore");
 
@@ -122,6 +122,28 @@ router.get("/orders", async (req, res) => {
   }
 });
 
+router.get("/activity", async (req, res) => {
+  const fallbackUsers = readData("users.json") || [];
+  const fallbackTransactions = readData("transactions.json") || [];
+  try {
+    const [transactions, users] = await Promise.all([
+      Transaction.find().sort({ date: -1 }).limit(100).lean(),
+      User.find({}, { password: 0 }).sort({ createdAt: -1 }).limit(100).lean()
+    ]);
+    const activity = [
+      ...transactions.map((item) => ({ ...item, activityType: item.type || "transaction", at: item.date })),
+      ...users.map((item) => ({ email: item.email, fullname: item.fullname, activityType: "account_created", referralCode: item.referralCode, at: item.createdAt }))
+    ].sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0)).slice(0, 100);
+    return res.json({ data: activity });
+  } catch (error) {
+    const activity = [
+      ...fallbackTransactions.map((item) => ({ ...item, activityType: item.type || "transaction", at: item.date })),
+      ...fallbackUsers.map((item) => ({ email: item.email, fullname: item.fullname, activityType: "account_created", referralCode: item.referralCode, at: item.createdAt }))
+    ].sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0)).slice(0, 100);
+    return res.json({ data: activity });
+  }
+});
+
 router.get("/payments", async (req, res) => {
   const fallbackTransactions = readData("transactions.json") || [];
   const limit = Math.min(Number(req.query.limit) || 100, 200);
@@ -166,7 +188,7 @@ router.put("/settings", async (req, res) => {
           ? Boolean(req.body[key])
           : key === "selectedProvider" ? String(req.body[key] || "") : Number(req.body[key]);
         if (key !== "selectedProvider" && !["neverBelowCost", "autoProvider"].includes(key) && (!Number.isFinite(value) || value < 0)) return res.status(400).json({ msg: `Invalid setting: ${key}` });
-        if (key === "selectedProvider" && !["", "resellerxpress", "remadata", "sendcomms"].includes(value)) return res.status(400).json({ msg: `Invalid setting: ${key}` });
+        if (key === "selectedProvider" && !["", "resellerxpress", "remadata", "reloadly"].includes(value)) return res.status(400).json({ msg: `Invalid setting: ${key}` });
         await AdminSetting.findOneAndUpdate({ key }, { key, value, updatedAt: new Date() }, { upsert: true, new: true });
         if (key === "targetProfit" || key === "minimumProfit" || key === "maxOneGb") reseller.configurePricingRules({ [key]: value });
         updates[key] = value;
@@ -204,7 +226,7 @@ router.get("/providers", async (req, res) => {
   const providers = [
     { id: "resellerxpress", name: "Reseller", configured: reseller.isConfigured(), balance: null },
     { id: "remadata", name: "RemaData", configured: remadata.isConfigured(), balance: null },
-    { id: "sendcomms", name: "SendComms", configured: sendcomms.isConfigured(), balance: null }
+    { id: "reloadly", name: "Reloadly", configured: reloadly.isConfigured(), balance: null }
   ];
   if (providers[0].configured) {
     try { const result = await reseller.getWalletBalance(); providers[0].balance = Number(result.balance ?? result.data?.balance); } catch (error) { providers[0].error = error.message; }
@@ -213,13 +235,13 @@ router.get("/providers", async (req, res) => {
     try { const result = await remadata.getWalletBalance(); providers[1].balance = Number(result.balance ?? result.data?.balance?.balance ?? result.data?.balance); } catch (error) { providers[1].error = error.message; }
   }
   if (providers[2].configured) {
-    try { const result = await sendcomms.getWalletBalance(); providers[2].balance = Number(result.balance ?? result.data?.balance ?? result.data?.wallet?.balance); } catch (error) { providers[2].error = error.message; }
+    try { const result = await reloadly.getWalletBalance(); providers[2].balance = Number(result.balance ?? result.data?.balance); } catch (error) { providers[2].error = error.message; }
   }
   return res.json({ providers });
 });
 
 router.get("/balances", async (req, res) => {
-  const balances = { paystack: null, resellerxpress: null, remadata: null, sendcomms: null };
+  const balances = { paystack: null, resellerxpress: null, remadata: null, reloadly: null };
   if (process.env.PAYSTACK_SECRET_KEY) {
     try {
       const axios = require("axios");
@@ -241,8 +263,8 @@ router.get("/balances", async (req, res) => {
     if (remadata.isConfigured()) {
       try { const value = await remadata.getWalletBalance(); result.providers.push({ id: "remadata", amount: Number(value.balance ?? value.data?.balance?.balance ?? value.data?.balance) }); } catch (error) { result.providers.push({ id: "remadata", error: error.message }); }
     }
-      if (sendcomms.isConfigured()) {
-        try { const value = await sendcomms.getWalletBalance(); result.providers.push({ id: "sendcomms", amount: Number(value.balance ?? value.data?.balance ?? value.data?.wallet?.balance) }); } catch (error) { result.providers.push({ id: "sendcomms", error: error.message }); }
+      if (reloadly.isConfigured()) {
+        try { const value = await reloadly.getWalletBalance(); result.providers.push({ id: "reloadly", amount: Number(value.balance ?? value.data?.balance) }); } catch (error) { result.providers.push({ id: "reloadly", error: error.message }); }
       }
     return result;
   });
@@ -296,7 +318,7 @@ router.get("/comparison", async (req, res) => {
       configuredProviders: {
         resellerxpress: reseller.isConfigured(),
         remadata: remadata.isConfigured(),
-        sendcomms: sendcomms.isConfigured()
+        reloadly: reloadly.isConfigured()
       },
       updatedAt: new Date().toISOString()
     });
@@ -306,7 +328,7 @@ router.get("/comparison", async (req, res) => {
       configuredProviders: {
         resellerxpress: reseller.isConfigured(),
         remadata: remadata.isConfigured(),
-        sendcomms: sendcomms.isConfigured()
+        reloadly: reloadly.isConfigured()
       }
     });
   }

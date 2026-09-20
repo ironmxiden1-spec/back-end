@@ -86,6 +86,7 @@ app.use("/api/transactions", require("./routes/transactions"));
 app.use("/api/resellerxpress", require("./routes/resellerxpress"));
 app.use("/api/remadata", require("./routes/remadata"));
 app.use("/api/sendcomms", require("./routes/sendcomms"));
+app.use("/api/support", require("./routes/support"));
 app.use("/api/admin", require("./routes/admin"));
 
 // ===== TEST ROUTE =====

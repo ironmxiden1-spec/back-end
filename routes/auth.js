@@ -37,12 +37,20 @@ function verifyPassword(password, storedPassword) {
   return crypto.timingSafeEqual(Buffer.from(actualHash, "hex"), Buffer.from(expectedHash, "hex"));
 }
 
+function makeReferralCode(user) {
+  const source = String(user._id || user.id || crypto.randomBytes(5).toString("hex"));
+  return `WIMPS-${source.replace(/[^a-z0-9]/gi, "").slice(-8).toUpperCase()}`;
+}
+
 function publicUser(user) {
   return {
     id: user._id || user.id,
     fullname: user.fullname,
     email: user.email,
     balance: user.balance || 0,
+    referralCode: user.referralCode || makeReferralCode(user),
+    referralCount: Number(user.referralCount || 0),
+    referralCredits: Number(user.referralCredits || 0),
     createdAt: user.createdAt,
     googleId: user.googleId || "",
     authToken: createAuthToken(user)
@@ -63,7 +71,7 @@ router.get("/session", requireUser, (req, res) => {
 // ===== REGISTER =====
 router.post("/register", async (req, res) => {
   try {
-    const { fullname, email, password } = req.body;
+    const { fullname, email, password, referralCode } = req.body;
 
     if (!fullname || !email || !password) {
       return res.status(400).json({ msg: "All fields required" });
@@ -80,8 +88,18 @@ router.post("/register", async (req, res) => {
         email: email.toLowerCase(),
         password: hashPassword(password),
         balance: 0,
+        referralCode: `WIMPS-${crypto.randomBytes(5).toString("hex").toUpperCase()}`,
+        referredBy: "",
+        referralCount: 0,
+        referralCredits: 0,
         createdAt: new Date().toISOString()
       };
+      const referrer = users.find((item) => String(item.referralCode || "").toUpperCase() === String(referralCode || "").trim().toUpperCase());
+      if (referrer && referrer.email !== user.email) {
+        user.referredBy = referrer.referralCode;
+        referrer.referralCount = Number(referrer.referralCount || 0) + 1;
+        referrer.referralCredits = Number((Number(referrer.referralCredits || 0) + 0.1).toFixed(2));
+      }
       users.push(user);
       writeUsers(users);
       return res.json({ msg: "Registration successful", user: publicUser(user) });
@@ -96,8 +114,21 @@ router.post("/register", async (req, res) => {
       fullname,
       email,
       password: hashPassword(password),
-      balance: 0
+      balance: 0,
+      referralCode: `WIMPS-${crypto.randomBytes(5).toString("hex").toUpperCase()}`,
+      referralCount: 0,
+      referralCredits: 0
     });
+
+    const referrer = referralCode
+      ? await User.findOne({ referralCode: String(referralCode).trim().toUpperCase() })
+      : null;
+    if (referrer && referrer.email.toLowerCase() !== email.toLowerCase()) {
+      user.referredBy = referrer.referralCode;
+      referrer.referralCount += 1;
+      referrer.referralCredits = Number((Number(referrer.referralCredits || 0) + 0.1).toFixed(2));
+      await referrer.save();
+    }
 
     await user.save();
 

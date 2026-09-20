@@ -18,6 +18,23 @@ const userSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  referralCode: {
+    type: String,
+    unique: true,
+    sparse: true
+  },
+  referredBy: {
+    type: String,
+    default: ""
+  },
+  referralCount: {
+    type: Number,
+    default: 0
+  },
+  referralCredits: {
+    type: Number,
+    default: 0
+  },
   createdAt: {
     type: Date,
     default: Date.now

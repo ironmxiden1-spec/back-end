@@ -1,7 +1,8 @@
 const axios = require("axios");
 const AdminSetting = require("../models/AdminSetting");
+const reloadly = require("./reloadly");
 const { getBundles: getRemaDataBundles, buyData: buyRemaData, isConfigured: isRemaDataConfigured } = require("./remadata");
-const { getBundles: getSendCommsBundles, buyData: buySendComms, isConfigured: isSendCommsConfigured, getConfiguredSmsFee, getSmsPricing } = require("./sendcomms");
+const { getConfiguredSmsFee, getSmsPricing } = require("./sendcomms");
 
 const DEFAULT_PROVIDER_FEE = Number(process.env.DEFAULT_PROVIDER_FEE || 0.5);
 let targetProfit = Number(process.env.TARGET_PROFIT || 1);
@@ -21,7 +22,7 @@ function configurePricingRules(settings = {}) {
   if (Number.isFinite(Number(settings.targetProfit))) targetProfit = Number(settings.targetProfit);
   if (Number.isFinite(Number(settings.minimumProfit))) minimumProfit = Number(settings.minimumProfit);
   if (Number.isFinite(Number(settings.maxOneGb))) maximumOneGbPrice = Number(settings.maxOneGb);
-  if (["", "resellerxpress", "remadata", "sendcomms"].includes(String(settings.selectedProvider ?? ""))) {
+  if (["", "resellerxpress", "remadata", "reloadly"].includes(String(settings.selectedProvider ?? ""))) {
     selectedProvider = String(settings.selectedProvider ?? "");
   }
 }
@@ -250,30 +251,15 @@ async function getRemaDataPlans(network) {
 }
 
 async function getSendCommsPlans(network) {
-  const normalizedNetwork = normalizeNetwork(network);
+  return [];
+}
 
-  if (!isSendCommsConfigured()) {
-    return [];
-  }
-
+async function getReloadlyPlans(network) {
+  if (!reloadly.isConfigured()) return [];
   try {
-    const response = await getSendCommsBundles(normalizedNetwork || network);
-
-    const rawPlans = response?.data?.networks && typeof response.data.networks === "object"
-      ? (normalizedNetwork ? response.data.networks[normalizedNetwork] || [] : Object.values(response.data.networks).flat())
-      : Array.isArray(response)
-      ? response
-      : Array.isArray(response?.data)
-        ? response.data
-        : Array.isArray(response?.plans)
-          ? response.plans
-          : Array.isArray(response?.result)
-            ? response.result
-            : [];
-
-    return rawPlans.map((plan) => normalizePlanRecord(plan, normalizedNetwork || network, "sendcomms"));
+    return (await reloadly.getBundles(network)).map((plan) => normalizePlanRecord(plan, network, "reloadly"));
   } catch (error) {
-    console.warn("SendComms API failed, skipping provider:", error.message);
+    console.warn("Reloadly API failed, skipping provider:", error.message);
     return [];
   }
 }
@@ -287,9 +273,9 @@ async function getPlans(network, options = {}) {
     const remaPlans = await getRemaDataPlans(normalizedNetwork);
     return buildVisiblePlans(remaPlans, normalizedNetwork, getConfiguredSmsFee(), options);
   }
-  if (requestedProvider === "sendcomms") {
-    const sendPlans = await getSendCommsPlans(normalizedNetwork);
-    return buildVisiblePlans(sendPlans, normalizedNetwork, getConfiguredSmsFee(), options);
+  if (requestedProvider === "reloadly") {
+    const reloadlyPlans = await getReloadlyPlans(normalizedNetwork);
+    return buildVisiblePlans(reloadlyPlans, normalizedNetwork, getConfiguredSmsFee(), options);
   }
   if (requestedProvider === "resellerxpress") {
     const resellerPlans = await getResellerPlans(normalizedNetwork);
@@ -298,17 +284,17 @@ async function getPlans(network, options = {}) {
 
   const smsPricing = await getSmsPricing();
 
-  const [resellerPlansResult, remadataPlansResult, sendcommsPlansResult] = await Promise.allSettled([
+  const [resellerPlansResult, remadataPlansResult, reloadlyPlansResult] = await Promise.allSettled([
     getResellerPlans(normalizedNetwork),
     getRemaDataPlans(normalizedNetwork),
-    getSendCommsPlans(normalizedNetwork)
+    getReloadlyPlans(normalizedNetwork)
   ]);
 
   const resellerPlans = resellerPlansResult.status === "fulfilled" ? resellerPlansResult.value : [];
   const remadataPlans = remadataPlansResult.status === "fulfilled" ? remadataPlansResult.value : [];
-  const sendcommsPlans = sendcommsPlansResult.status === "fulfilled" ? sendcommsPlansResult.value : [];
+  const reloadlyPlans = reloadlyPlansResult.status === "fulfilled" ? reloadlyPlansResult.value : [];
 
-  const combined = [...resellerPlans, ...remadataPlans, ...sendcommsPlans];
+  const combined = [...resellerPlans, ...remadataPlans, ...reloadlyPlans];
 
   return buildVisiblePlans(combined, normalizedNetwork, smsPricing.fee, options);
 }
@@ -441,7 +427,13 @@ async function placeProviderOrder(provider, input = {}) {
   };
 
   if (normalizedProvider === "remadata") return buyRemaData(providerInput);
-  if (normalizedProvider === "sendcomms") return buySendComms(providerInput);
+  if (normalizedProvider === "reloadly") return reloadly.buyData({
+    phone: input.phone,
+    network: input.network,
+    amount: input.providerAmount || input.price || input.cost,
+    operatorId: input.operatorId,
+    reference: input.request_id
+  });
 
   throw new Error(`Unsupported provider: ${provider}`);
 }

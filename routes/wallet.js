@@ -234,7 +234,10 @@ router.post("/buy", async (req, res) => {
       if (!plan) return res.status(409).json({ msg: "Selected bundle is no longer available" });
 
       const sellingPrice = Number(plan.sellingPrice || (Number(plan.cost || plan.total || 0) + 1));
-      const requiredAmount = sellingPrice * Math.max(Number(incoming.quantity || 1), 1);
+      const quantity = Math.max(Number(incoming.quantity || 1), 1);
+      const grossAmount = sellingPrice * quantity;
+      const referralDiscount = Math.min(Number(user.referralCredits || 0), grossAmount);
+      const requiredAmount = Number((grossAmount - referralDiscount).toFixed(2));
       if (!requiredAmount) return res.status(400).json({ msg: "Invalid bundle amount" });
 
       if (reference) {
@@ -251,13 +254,14 @@ router.post("/buy", async (req, res) => {
 
       const transaction = {
         _id: createId(), email, type: "purchase", network: plan.network, provider: plan.provider,
-        amount: requiredAmount, bundle: bundle || formatBundleLabel(plan),
+        amount: requiredAmount, referralDiscount, bundle: bundle || formatBundleLabel(plan),
         phone, paymentMethod: reference ? "paystack" : "wallet",
         status: reference ? "pending" : "completed", reference: reference || createId(),
         date: new Date().toISOString()
       };
       const transactions = readTransactions();
       transactions.push(transaction);
+      user.referralCredits = Number((Number(user.referralCredits || 0) - referralDiscount).toFixed(2));
       writeUsers(users);
       writeTransactions(transactions);
       return res.json({
@@ -311,8 +315,10 @@ router.post("/buy", async (req, res) => {
       }
 
       const safeQuantity = Number.isFinite(quantity) && quantity > 0 ? quantity : 1;
-      const requiredAmount = Number(plan.sellingPrice || 0) * safeQuantity;
+      const grossAmount = Number(plan.sellingPrice || 0) * safeQuantity;
       const providerCost = Number(plan.cost || plan.total || 0) * safeQuantity;
+      const referralDiscount = Math.min(Number(user.referralCredits || 0), Math.max(0, grossAmount - providerCost));
+      const requiredAmount = Number((grossAmount - referralDiscount).toFixed(2));
       const providerFee = Number(plan.fee || 0) * safeQuantity;
       const smsFee = Number(plan.smsFee || 0) * safeQuantity;
       const expectedProfit = Number(plan.expectedProfit || 0) * safeQuantity;
@@ -356,6 +362,7 @@ router.post("/buy", async (req, res) => {
         provider: plan.provider,
         amount: requiredAmount,
         providerCost: Number(plan.price || providerCost),
+        referralDiscount,
         providerFee,
         smsFee,
         expectedProfit,
@@ -375,6 +382,8 @@ router.post("/buy", async (req, res) => {
             phone,
             network: providerPlan.network,
             volumeGb: providerPlan.volumeGb || providerPlan.volume,
+            operatorId: providerPlan.operatorId,
+            providerAmount: providerPlan.price || providerPlan.cost || providerPlan.total,
             request_id: requestId,
             quantity
           });
@@ -394,6 +403,8 @@ router.post("/buy", async (req, res) => {
             phone,
             network: providerPlan.network,
             volumeGb: providerPlan.volumeGb || providerPlan.volume,
+            operatorId: providerPlan.operatorId,
+            providerAmount: providerPlan.price || providerPlan.cost || providerPlan.total,
             request_id: requestId,
             quantity
           });
@@ -454,6 +465,8 @@ router.post("/buy", async (req, res) => {
 
         if (!reference) {
           user.balance += requiredAmount;
+          user.referralCredits = Number((Number(user.referralCredits || 0) - referralDiscount).toFixed(2));
+          user.referralCredits = Number((Number(user.referralCredits || 0) + referralDiscount).toFixed(2));
           await user.save();
         }
 
