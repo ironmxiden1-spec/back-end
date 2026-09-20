@@ -1,7 +1,10 @@
 const axios = require("axios");
 
 function getBaseUrl() {
-  return process.env.RELOADLY_BASE_URL || "https://topups.reloadly.com";
+  if (process.env.RELOADLY_BASE_URL) return process.env.RELOADLY_BASE_URL;
+  return String(process.env.RELOADLY_ENV || "production").toLowerCase() === "sandbox"
+    ? "https://topups-sandbox.reloadly.com"
+    : "https://topups.reloadly.com";
 }
 
 function getAuthUrl() {
@@ -67,7 +70,7 @@ function normalizeNetwork(network) {
   const value = String(network || "").toLowerCase();
   if (value.includes("mtn")) return "mtn";
   if (value.includes("telecel") || value.includes("vodafone")) return "telecel";
-  if (value.includes("airteltigo") || value.includes("atgo")) return "airteltigo";
+  if (value.includes("airteltigo") || value.includes("airtel-tigo") || value.includes("atgo")) return "airteltigo";
   return value;
 }
 
@@ -85,6 +88,11 @@ function collectBundleCandidates(operator) {
     ...(Array.isArray(operator.bundles) ? operator.bundles : []),
     ...(Array.isArray(operator.data) ? operator.data : [])
   ];
+  const descriptions = operator.localFixedAmountsDescriptions || operator.fixedAmountsDescriptions || {};
+  const amounts = operator.localFixedAmounts || operator.fixedAmounts || [];
+  Object.entries(descriptions).forEach(([amount, description]) => {
+    candidates.push({ amount: Number(amount), description });
+  });
   return candidates.length ? candidates : [operator];
 }
 
@@ -117,7 +125,7 @@ function normalizePlan(operator, bundle, network) {
 
 async function getOperators() {
   const response = await request("get", `/operators/countries/${getCountryCode()}`, {
-    params: { includeBundles: true, includeData: true, includeCombo: false, bundlesOnly: true, size: 200 }
+     params: { includeBundles: true, includeData: true, includeCombo: false, bundlesOnly: false, dataOnly: false, size: 200 }
   });
   const payload = response.data;
   if (Array.isArray(payload)) return payload;
@@ -132,8 +140,13 @@ async function getBundles(network) {
   const operators = await getOperators();
   return operators
     .filter((operator) => !normalizedNetwork || normalizeNetwork(operator.name) === normalizedNetwork)
-    .flatMap((operator) => collectBundleCandidates(operator).map((bundle) => normalizePlan(operator, bundle, normalizedNetwork)))
-    .filter((plan) => plan.volumeGb >= 1 && plan.price > 0);
+    .flatMap((operator) => {
+      const descriptions = operator.localFixedAmountsDescriptions || operator.fixedAmountsDescriptions || {};
+      const candidates = Object.entries(descriptions).map(([amount, description]) => ({ amount: Number(amount), description }));
+      const source = candidates.length ? candidates : collectBundleCandidates(operator);
+      return source.map((bundle) => normalizePlan(operator, bundle, normalizedNetwork));
+    })
+    .filter((plan) => Number(plan.volumeGb) >= 1 && Number(plan.price) > 0);
 }
 
 async function getWalletBalance() {
@@ -158,4 +171,17 @@ async function buyData({ phone, network, amount, operatorId, reference }) {
   return response.data;
 }
 
-module.exports = { isConfigured, getBundles, getWalletBalance, buyData, normalizeNetwork };
+async function getBundles(network) {
+  if (!isConfigured()) throw new Error("Reloadly client credentials are not configured");
+  const normalizedNetwork = normalizeNetwork(network);
+  const response = await request("get", `/operators/countries/${getCountryCode()}`, {
+    params: { includeBundles: true, includeData: true, includeCombo: false, bundlesOnly: false, dataOnly: false, size: 200 }
+  });
+  const operators = Array.isArray(response.data) ? response.data : response.data?.content || [];
+  return operators
+    .filter((operator) => !normalizedNetwork || normalizeNetwork(operator.name) === normalizedNetwork)
+    .flatMap((operator) => Object.entries(operator.localFixedAmountsDescriptions || operator.fixedAmountsDescriptions || {}).map(([amount, description]) => normalizePlan(operator, { amount: Number(amount), description }, normalizedNetwork)))
+    .filter((plan) => Number(plan.volumeGb) >= 1 && Number(plan.price) > 0);
+}
+
+module.exports = { isConfigured, getBundles, getWalletBalance, buyData, normalizeNetwork, getOperators, collectBundleCandidates, normalizePlan };

@@ -42,6 +42,18 @@ function makeReferralCode(user) {
   return `WIMPS-${source.replace(/[^a-z0-9]/gi, "").slice(-8).toUpperCase()}`;
 }
 
+async function getReferralReward(req) {
+  try {
+    const record = isFallback(req)
+      ? (readData("admin-settings.json") || []).find((item) => item.key === "referralReward")
+      : await AdminSetting.findOne({ key: "referralReward" }).lean();
+    const value = Number(record?.value);
+    return Number.isFinite(value) && value >= 0 ? value : 0.1;
+  } catch (error) {
+    return 0.1;
+  }
+}
+
 function publicUser(user) {
   return {
     id: user._id || user.id,
@@ -95,10 +107,11 @@ router.post("/register", async (req, res) => {
         createdAt: new Date().toISOString()
       };
       const referrer = users.find((item) => String(item.referralCode || "").toUpperCase() === String(referralCode || "").trim().toUpperCase());
+        const reward = await getReferralReward(req);
       if (referrer && referrer.email !== user.email) {
         user.referredBy = referrer.referralCode;
         referrer.referralCount = Number(referrer.referralCount || 0) + 1;
-        referrer.referralCredits = Number((Number(referrer.referralCredits || 0) + 0.1).toFixed(2));
+        referrer.referralCredits = Number((Number(referrer.referralCredits || 0) + reward).toFixed(2));
       }
       users.push(user);
       writeUsers(users);
@@ -124,9 +137,10 @@ router.post("/register", async (req, res) => {
       ? await User.findOne({ referralCode: String(referralCode).trim().toUpperCase() })
       : null;
     if (referrer && referrer.email.toLowerCase() !== email.toLowerCase()) {
+        const reward = await getReferralReward(req);
       user.referredBy = referrer.referralCode;
       referrer.referralCount += 1;
-      referrer.referralCredits = Number((Number(referrer.referralCredits || 0) + 0.1).toFixed(2));
+      referrer.referralCredits = Number((Number(referrer.referralCredits || 0) + reward).toFixed(2));
       await referrer.save();
     }
 

@@ -172,7 +172,7 @@ router.get("/settings", async (req, res) => {
   try {
     const records = await AdminSetting.find().lean();
     const settings = Object.fromEntries(records.map((record) => [record.key, record.value]));
-    return res.json({ settings: { targetProfit: 1, minimumProfit: 0.5, maxOneGb: 5, neverBelowCost: true, autoProvider: true, ...settings } });
+    return res.json({ settings: { targetProfit: 1, minimumProfit: 0.5, maxOneGb: 5, referralReward: 0.1, neverBelowCost: true, autoProvider: true, ...settings } });
   } catch (error) {
     return res.status(500).json({ msg: "Unable to load admin settings" });
   }
@@ -180,7 +180,7 @@ router.get("/settings", async (req, res) => {
 
 router.put("/settings", async (req, res) => {
   try {
-    const allowed = ["targetProfit", "minimumProfit", "maxOneGb", "neverBelowCost", "autoProvider", "selectedProvider"];
+    const allowed = ["targetProfit", "minimumProfit", "maxOneGb", "referralReward", "neverBelowCost", "autoProvider", "selectedProvider"];
     const updates = {};
     for (const key of allowed) {
       if (req.body?.[key] !== undefined) {
