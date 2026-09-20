@@ -30,7 +30,9 @@ function createAuthToken(user) {
 }
 
 function verifyAuthToken(token) {
-  const [payload, signature] = String(token || "").split(".");
+  const parts = String(token || "").split(".");
+  if (parts.length !== 2) return null;
+  const [payload, signature] = parts;
   if (!payload || !signature) return null;
 
   const expected = sign(payload);

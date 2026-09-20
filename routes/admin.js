@@ -5,7 +5,7 @@ const Transaction = require("../models/Transaction");
 const AdminSetting = require("../models/AdminSetting");
 const reseller = require("../services/resellerxpress");
 const remadata = require("../services/remadata");
-const reloadly = require("../services/reloadly");
+const datamart = require("../services/datamart");
 const { readData, writeData } = require("../utils/fileDb");
 const { isFallback, readUsers, writeUsers, readTransactions, writeTransactions } = require("../utils/localStore");
 
@@ -32,54 +32,92 @@ function startOfDay() {
   return date;
 }
 
+const PROVIDER_IDS = ["", "resellerxpress", "remadata", "datamart"];
+
+const SETTING_SCHEMA = {
+  targetProfit: {
+    coerce: (value) => Number(value),
+    validate: (value) => Number.isFinite(value) && value >= 0
+  },
+  minimumProfit: {
+    coerce: (value) => Number(value),
+    validate: (value) => Number.isFinite(value) && value >= 0
+  },
+  maxOneGb: {
+    coerce: (value) => Number(value),
+    validate: (value) => Number.isFinite(value) && value >= 0
+  },
+  referralReward: {
+    coerce: (value) => Number(value),
+    validate: (value) => Number.isFinite(value) && value >= 0
+  },
+  neverBelowCost: {
+    coerce: (value) => Boolean(value),
+    validate: () => true
+  },
+  autoProvider: {
+    coerce: (value) => Boolean(value),
+    validate: () => true
+  },
+  selectedProvider: {
+    coerce: (value) => String(value || ""),
+    validate: (value) => PROVIDER_IDS.includes(value)
+  }
+};
+
+function buildFallbackOverview(fallbackUsers, fallbackTransactions, totalUsers, today) {
+  const todayPurchases = fallbackTransactions.filter((tx) => tx.type === "purchase" && new Date(tx.date || Date.now()) >= today);
+  const todaySales = todayPurchases.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
+  const todayProfit = todayPurchases.reduce((sum, tx) => sum + Number(tx.actualProfit ?? tx.expectedProfit ?? 0), 0);
+  const todayRefunds = fallbackTransactions.filter((tx) => tx.status === "refunded").reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
+  return {
+    totalUsers: Number(totalUsers || 0) > 0 ? totalUsers : fallbackUsers.length,
+    todaySales: Number(todaySales.toFixed(2)),
+    todayProfit: Number(todayProfit.toFixed(2)),
+    todayOrders: todayPurchases.length,
+    successfulOrders: fallbackTransactions.filter((tx) => tx.type === "purchase" && ["completed", "success", "successful", "delivered"].includes(tx.status)).length,
+    pendingOrders: fallbackTransactions.filter((tx) => tx.type === "purchase" && tx.status === "pending").length,
+    failedOrders: fallbackTransactions.filter((tx) => tx.type === "purchase" && tx.status === "failed").length,
+    todayRefunds
+  };
+}
+
+async function fetchProviderBalance(id, providerService) {
+  const extractAmount = (value) => Number(value.balance ?? value.data?.balance?.balance ?? value.data?.balance);
+  try {
+    const value = await providerService.getWalletBalance();
+    return { id, amount: extractAmount(value) };
+  } catch (error) {
+    return { id, error: error.response?.data?.message || error.message };
+  }
+}
+
 router.use(requireAdminToken);
 
 router.get("/overview", async (req, res) => {
   const fallbackUsers = readData("users.json") || [];
   const fallbackTransactions = readData("transactions.json") || [];
   const today = startOfDay();
+  let totalUsers = 0;
+
+  const fallbackOnly = isFallback(req) && Boolean(fallbackUsers.length || fallbackTransactions.length);
 
   try {
-    const [totalUsers, todayTransactions, successfulOrders, pendingOrders, failedOrders] = await Promise.all([
+    const [dbTotalUsers, todayTransactions, successfulOrders, pendingOrders, failedOrders] = await Promise.all([
       User.countDocuments(),
       Transaction.find({ date: { $gte: today } }).lean(),
       Transaction.countDocuments({ type: "purchase", status: { $in: ["completed", "success", "successful", "delivered"] } }),
       Transaction.countDocuments({ type: "purchase", status: "pending" }),
       Transaction.countDocuments({ type: "purchase", status: "failed" })
     ]);
+    totalUsers = dbTotalUsers;
 
     if (isFallback(req) && Number(totalUsers || 0) <= 0 && fallbackUsers.length > 0) {
-      const todayPurchases = fallbackTransactions.filter((tx) => tx.type === "purchase" && new Date(tx.date || Date.now()) >= today);
-      const todaySales = todayPurchases.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
-      const todayProfit = todayPurchases.reduce((sum, tx) => sum + Number(tx.actualProfit ?? tx.expectedProfit ?? 0), 0);
-      const todayRefunds = fallbackTransactions.filter((tx) => tx.status === "refunded").reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
-      return res.json({
-        totalUsers: fallbackUsers.length,
-        todaySales: Number(todaySales.toFixed(2)),
-        todayProfit: Number(todayProfit.toFixed(2)),
-        todayOrders: todayPurchases.length,
-        successfulOrders: fallbackTransactions.filter((tx) => tx.type === "purchase" && ["completed", "success", "successful", "delivered"].includes(tx.status)).length,
-        pendingOrders: fallbackTransactions.filter((tx) => tx.type === "purchase" && tx.status === "pending").length,
-        failedOrders: fallbackTransactions.filter((tx) => tx.type === "purchase" && tx.status === "failed").length,
-        todayRefunds
-      });
+      return res.json(buildFallbackOverview(fallbackUsers, fallbackTransactions, totalUsers, today));
     }
 
     if (isFallback(req) && Array.isArray(todayTransactions) && todayTransactions.length === 0 && fallbackTransactions.length > 0) {
-      const todayPurchases = fallbackTransactions.filter((tx) => tx.type === "purchase" && new Date(tx.date || Date.now()) >= today);
-      const todaySales = todayPurchases.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
-      const todayProfit = todayPurchases.reduce((sum, tx) => sum + Number(tx.actualProfit ?? tx.expectedProfit ?? 0), 0);
-      const todayRefunds = fallbackTransactions.filter((tx) => tx.status === "refunded").reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
-      return res.json({
-        totalUsers,
-        todaySales: Number(todaySales.toFixed(2)),
-        todayProfit: Number(todayProfit.toFixed(2)),
-        todayOrders: todayPurchases.length,
-        successfulOrders: fallbackTransactions.filter((tx) => tx.type === "purchase" && ["completed", "success", "successful", "delivered"].includes(tx.status)).length,
-        pendingOrders: fallbackTransactions.filter((tx) => tx.type === "purchase" && tx.status === "pending").length,
-        failedOrders: fallbackTransactions.filter((tx) => tx.type === "purchase" && tx.status === "failed").length,
-        todayRefunds
-      });
+      return res.json(buildFallbackOverview(fallbackUsers, fallbackTransactions, totalUsers, today));
     }
 
     const todayPurchases = todayTransactions.filter((tx) => tx.type === "purchase");
@@ -88,29 +126,16 @@ router.get("/overview", async (req, res) => {
     const todayRefunds = todayTransactions.filter((tx) => tx.status === "refunded").reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
     return res.json({ totalUsers, todaySales: Number(todaySales.toFixed(2)), todayProfit: Number(todayProfit.toFixed(2)), todayOrders: todayPurchases.length, successfulOrders, pendingOrders, failedOrders, todayRefunds });
   } catch (error) {
-    if (!isFallback(req)) {
+    if (!fallbackOnly) {
       return res.status(503).json({ msg: "Live dashboard data is temporarily unavailable" });
     }
-    const todayPurchases = fallbackTransactions.filter((tx) => tx.type === "purchase" && new Date(tx.date || Date.now()) >= today);
-    const todaySales = todayPurchases.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
-    const todayProfit = todayPurchases.reduce((sum, tx) => sum + Number(tx.actualProfit ?? tx.expectedProfit ?? 0), 0);
-    const todayRefunds = fallbackTransactions.filter((tx) => tx.status === "refunded").reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
-    return res.json({
-      totalUsers: fallbackUsers.length,
-      todaySales: Number(todaySales.toFixed(2)),
-      todayProfit: Number(todayProfit.toFixed(2)),
-      todayOrders: todayPurchases.length,
-      successfulOrders: fallbackTransactions.filter((tx) => tx.type === "purchase" && ["completed", "success", "successful", "delivered"].includes(tx.status)).length,
-      pendingOrders: fallbackTransactions.filter((tx) => tx.type === "purchase" && tx.status === "pending").length,
-      failedOrders: fallbackTransactions.filter((tx) => tx.type === "purchase" && tx.status === "failed").length,
-      todayRefunds
-    });
+    return res.json(buildFallbackOverview(fallbackUsers, fallbackTransactions, totalUsers, today));
   }
 });
 
 router.get("/orders", async (req, res) => {
   const fallbackTransactions = readData("transactions.json") || [];
-  const limit = Math.min(Number(req.query.limit) || 50, 100);
+  const limit = Math.max(1, Math.min(Number(req.query.limit) || 50, 100));
   try {
     const filter = {};
     if (req.query.status) filter.status = req.query.status;
@@ -146,7 +171,7 @@ router.get("/activity", async (req, res) => {
 
 router.get("/payments", async (req, res) => {
   const fallbackTransactions = readData("transactions.json") || [];
-  const limit = Math.min(Number(req.query.limit) || 100, 200);
+  const limit = Math.max(1, Math.min(Number(req.query.limit) || 100, 200));
   try {
     const data = await Transaction.find({ paymentMethod: { $exists: true, $ne: null } }).sort({ date: -1 }).limit(limit).lean();
     if (!Array.isArray(data) || data.length === 0) return res.json({ data: fallbackTransactions.slice(0, limit) });
@@ -158,7 +183,7 @@ router.get("/payments", async (req, res) => {
 
 router.get("/customers", async (req, res) => {
   const fallbackUsers = readData("users.json") || [];
-  const limit = Math.min(Number(req.query.limit) || 100, 200);
+  const limit = Math.max(1, Math.min(Number(req.query.limit) || 100, 200));
   try {
     const data = await User.find({}, { password: 0, resetPasswordTokenHash: 0, resetPasswordExpires: 0 }).sort({ createdAt: -1 }).limit(limit).lean();
     if (!Array.isArray(data) || data.length === 0) return res.json({ data: fallbackUsers.slice(0, limit) });
@@ -180,19 +205,14 @@ router.get("/settings", async (req, res) => {
 
 router.put("/settings", async (req, res) => {
   try {
-    const allowed = ["targetProfit", "minimumProfit", "maxOneGb", "referralReward", "neverBelowCost", "autoProvider", "selectedProvider"];
     const updates = {};
-    for (const key of allowed) {
-      if (req.body?.[key] !== undefined) {
-        const value = ["neverBelowCost", "autoProvider"].includes(key)
-          ? Boolean(req.body[key])
-          : key === "selectedProvider" ? String(req.body[key] || "") : Number(req.body[key]);
-        if (key !== "selectedProvider" && !["neverBelowCost", "autoProvider"].includes(key) && (!Number.isFinite(value) || value < 0)) return res.status(400).json({ msg: `Invalid setting: ${key}` });
-        if (key === "selectedProvider" && !["", "resellerxpress", "remadata", "reloadly"].includes(value)) return res.status(400).json({ msg: `Invalid setting: ${key}` });
-        await AdminSetting.findOneAndUpdate({ key }, { key, value, updatedAt: new Date() }, { upsert: true, new: true });
-        if (key === "targetProfit" || key === "minimumProfit" || key === "maxOneGb") reseller.configurePricingRules({ [key]: value });
-        updates[key] = value;
-      }
+    for (const [key, schema] of Object.entries(SETTING_SCHEMA)) {
+      if (req.body?.[key] === undefined) continue;
+      const value = schema.coerce(req.body[key]);
+      if (!schema.validate(value)) return res.status(400).json({ msg: `Invalid setting: ${key}` });
+      await AdminSetting.findOneAndUpdate({ key }, { key, value, updatedAt: new Date() }, { upsert: true, new: true });
+      if (["targetProfit", "minimumProfit", "maxOneGb"].includes(key)) reseller.configurePricingRules({ [key]: value });
+      updates[key] = value;
     }
     return res.json({ settings: updates });
   } catch (error) {
@@ -226,22 +246,61 @@ router.get("/providers", async (req, res) => {
   const providers = [
     { id: "resellerxpress", name: "Reseller", configured: reseller.isConfigured(), balance: null },
     { id: "remadata", name: "RemaData", configured: remadata.isConfigured(), balance: null },
-    { id: "reloadly", name: "Reloadly", configured: reloadly.isConfigured(), balance: null }
+    { id: "datamart", name: "DataMart GH", configured: datamart.isConfigured(), balance: null }
   ];
-  if (providers[0].configured) {
-    try { const result = await reseller.getWalletBalance(); providers[0].balance = Number(result.balance ?? result.data?.balance); } catch (error) { providers[0].error = error.message; }
-  }
-  if (providers[1].configured) {
-    try { const result = await remadata.getWalletBalance(); providers[1].balance = Number(result.balance ?? result.data?.balance?.balance ?? result.data?.balance); } catch (error) { providers[1].error = error.message; }
-  }
-  if (providers[2].configured) {
-    try { const result = await reloadly.getWalletBalance(); providers[2].balance = Number(result.balance ?? result.data?.balance); } catch (error) { providers[2].error = error.response?.data?.message || error.message; }
-  }
+  const services = { resellerxpress: reseller, remadata: remadata, datamart };
+  await Promise.all(providers.map(async (provider) => {
+    if (!provider.configured) return;
+    const result = await fetchProviderBalance(provider.id, services[provider.id]);
+    if (result.amount !== undefined) provider.balance = result.amount;
+    else provider.error = result.error;
+  }));
   return res.json({ providers });
 });
 
+router.get("/checkers/products", async (req, res) => {
+  try {
+    const result = await datamart.getCheckerProducts();
+    return res.json(result);
+  } catch (error) {
+    return res.status(503).json({ msg: error.message || "Unable to load DataMart checker products" });
+  }
+});
+
+router.get("/datamart/withdrawals/limits", async (req, res) => {
+  try {
+    return res.json(await datamart.getWithdrawalLimits());
+  } catch (error) {
+    return res.status(503).json({ msg: error.message || "Unable to load DataMart withdrawal limits" });
+  }
+});
+
+router.get("/datamart/withdrawals", async (req, res) => {
+  try {
+    return res.json(await datamart.listWithdrawals(req.query));
+  } catch (error) {
+    return res.status(503).json({ msg: error.message || "Unable to load DataMart withdrawals" });
+  }
+});
+
+router.get("/datamart/withdrawals/:reference", async (req, res) => {
+  try {
+    return res.json(await datamart.getWithdrawal(req.params.reference));
+  } catch (error) {
+    return res.status(503).json({ msg: error.message || "Unable to load DataMart withdrawal" });
+  }
+});
+
+router.post("/datamart/withdrawals", async (req, res) => {
+  try {
+    return res.json(await datamart.createWithdrawal({ ...req.body, idempotencyKey: req.get("X-Idempotency-Key") }));
+  } catch (error) {
+    return res.status(400).json({ msg: error.message || "Unable to create DataMart withdrawal" });
+  }
+});
+
 router.get("/balances", async (req, res) => {
-  const balances = { paystack: null, resellerxpress: null, remadata: null, reloadly: null };
+  const balances = { paystack: null, resellerxpress: null, remadata: null, datamart: null };
   if (process.env.PAYSTACK_SECRET_KEY) {
     try {
       const axios = require("axios");
@@ -255,20 +314,15 @@ router.get("/balances", async (req, res) => {
       balances.paystack = { error: error.response?.data?.message || "Paystack balance unavailable" };
     }
   }
-  const providerResponse = await Promise.resolve().then(async () => {
-    const result = { providers: [] };
-    if (reseller.isConfigured()) {
-      try { const value = await reseller.getWalletBalance(); result.providers.push({ id: "resellerxpress", amount: Number(value.balance ?? value.data?.balance) }); } catch (error) { result.providers.push({ id: "resellerxpress", error: error.message }); }
-    }
-    if (remadata.isConfigured()) {
-      try { const value = await remadata.getWalletBalance(); result.providers.push({ id: "remadata", amount: Number(value.balance ?? value.data?.balance?.balance ?? value.data?.balance) }); } catch (error) { result.providers.push({ id: "remadata", error: error.message }); }
-    }
-      if (reloadly.isConfigured()) {
-        try { const value = await reloadly.getWalletBalance(); result.providers.push({ id: "reloadly", amount: Number(value.balance ?? value.data?.balance) }); } catch (error) { result.providers.push({ id: "reloadly", error: error.response?.data?.message || error.message }); }
-      }
-    return result;
-  });
-  providerResponse.providers.forEach((provider) => { balances[provider.id] = provider; });
+  const providerServices = [
+    { id: "resellerxpress", service: reseller },
+    { id: "remadata", service: remadata },
+    { id: "datamart", service: datamart }
+  ].filter((provider) => provider.service.isConfigured());
+  const providerResults = await Promise.all(
+    providerServices.map((provider) => fetchProviderBalance(provider.id, provider.service))
+  );
+  providerResults.forEach((provider) => { balances[provider.id] = provider; });
   return res.json({ balances });
 });
 
@@ -318,7 +372,7 @@ router.get("/comparison", async (req, res) => {
       configuredProviders: {
         resellerxpress: reseller.isConfigured(),
         remadata: remadata.isConfigured(),
-        reloadly: reloadly.isConfigured()
+        datamart: datamart.isConfigured()
       },
       updatedAt: new Date().toISOString()
     });
@@ -328,7 +382,7 @@ router.get("/comparison", async (req, res) => {
       configuredProviders: {
         resellerxpress: reseller.isConfigured(),
         remadata: remadata.isConfigured(),
-        reloadly: reloadly.isConfigured()
+        datamart: datamart.isConfigured()
       }
     });
   }

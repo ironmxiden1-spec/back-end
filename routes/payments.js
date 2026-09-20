@@ -28,10 +28,14 @@ router.post("/paystack/webhook", async (req, res) => {
   }
 
   if (event.event === "charge.success" && event.data?.reference) {
-    await Transaction.updateOne(
-      { reference: event.data.reference },
-      { $set: { status: "payment_verified", paymentFee: Number(event.data.fees || 0) / 100 } }
-    );
+    try {
+      await Transaction.updateOne(
+        { reference: event.data.reference },
+        { $set: { status: "payment_verified", paymentFee: Number(event.data.fees || 0) / 100 } }
+      );
+    } catch (error) {
+      console.error("PAYSTACK TRANSACTION UPDATE ERROR:", error.message);
+    }
   }
 
   return res.status(200).json({ received: true });

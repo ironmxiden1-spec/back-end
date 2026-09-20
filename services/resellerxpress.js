@@ -1,6 +1,6 @@
 const axios = require("axios");
 const AdminSetting = require("../models/AdminSetting");
-const reloadly = require("./reloadly");
+const datamart = require("./datamart");
 const { getBundles: getRemaDataBundles, buyData: buyRemaData, isConfigured: isRemaDataConfigured } = require("./remadata");
 const { getConfiguredSmsFee, getSmsPricing } = require("./sendcomms");
 
@@ -22,7 +22,7 @@ function configurePricingRules(settings = {}) {
   if (Number.isFinite(Number(settings.targetProfit))) targetProfit = Number(settings.targetProfit);
   if (Number.isFinite(Number(settings.minimumProfit))) minimumProfit = Number(settings.minimumProfit);
   if (Number.isFinite(Number(settings.maxOneGb))) maximumOneGbPrice = Number(settings.maxOneGb);
-  if (["", "resellerxpress", "remadata", "reloadly"].includes(String(settings.selectedProvider ?? ""))) {
+  if (["", "resellerxpress", "remadata", "datamart"].includes(String(settings.selectedProvider ?? ""))) {
     selectedProvider = String(settings.selectedProvider ?? "");
   }
 }
@@ -254,12 +254,12 @@ async function getSendCommsPlans(network) {
   return [];
 }
 
-async function getReloadlyPlans(network) {
-  if (!reloadly.isConfigured()) return [];
+async function getDataMartPlans(network) {
+  if (!datamart.isConfigured()) return [];
   try {
-    return (await reloadly.getBundles(network)).map((plan) => normalizePlanRecord(plan, network, "reloadly"));
+    return (await datamart.getBundles(network)).map((plan) => normalizePlanRecord(plan, network, "datamart"));
   } catch (error) {
-    console.warn("Reloadly API failed, skipping provider:", error.message);
+    console.warn("DataMart API failed, skipping provider:", error.message);
     return [];
   }
 }
@@ -273,9 +273,9 @@ async function getPlans(network, options = {}) {
     const remaPlans = await getRemaDataPlans(normalizedNetwork);
     return buildVisiblePlans(remaPlans, normalizedNetwork, getConfiguredSmsFee(), options);
   }
-  if (requestedProvider === "reloadly") {
-    const reloadlyPlans = await getReloadlyPlans(normalizedNetwork);
-    return buildVisiblePlans(reloadlyPlans, normalizedNetwork, getConfiguredSmsFee(), options);
+  if (requestedProvider === "datamart") {
+    const datamartPlans = await getDataMartPlans(normalizedNetwork);
+    return buildVisiblePlans(datamartPlans, normalizedNetwork, getConfiguredSmsFee(), options);
   }
   if (requestedProvider === "resellerxpress") {
     const resellerPlans = await getResellerPlans(normalizedNetwork);
@@ -284,17 +284,17 @@ async function getPlans(network, options = {}) {
 
   const smsPricing = await getSmsPricing();
 
-  const [resellerPlansResult, remadataPlansResult, reloadlyPlansResult] = await Promise.allSettled([
+  const [resellerPlansResult, remadataPlansResult, datamartPlansResult] = await Promise.allSettled([
     getResellerPlans(normalizedNetwork),
     getRemaDataPlans(normalizedNetwork),
-    getReloadlyPlans(normalizedNetwork)
+    getDataMartPlans(normalizedNetwork)
   ]);
 
   const resellerPlans = resellerPlansResult.status === "fulfilled" ? resellerPlansResult.value : [];
   const remadataPlans = remadataPlansResult.status === "fulfilled" ? remadataPlansResult.value : [];
-  const reloadlyPlans = reloadlyPlansResult.status === "fulfilled" ? reloadlyPlansResult.value : [];
+  const datamartPlans = datamartPlansResult.status === "fulfilled" ? datamartPlansResult.value : [];
 
-  const combined = [...resellerPlans, ...remadataPlans, ...reloadlyPlans];
+  const combined = [...resellerPlans, ...remadataPlans, ...datamartPlans];
 
   return buildVisiblePlans(combined, normalizedNetwork, smsPricing.fee, options);
 }
@@ -427,12 +427,12 @@ async function placeProviderOrder(provider, input = {}) {
   };
 
   if (normalizedProvider === "remadata") return buyRemaData(providerInput);
-  if (normalizedProvider === "reloadly") return reloadly.buyData({
+  if (normalizedProvider === "datamart") return datamart.buyData({
     phone: input.phone,
     network: input.network,
-    amount: input.providerAmount || input.price || input.cost,
-    operatorId: input.operatorId,
-    reference: input.request_id
+    volumeGb,
+    capacity: input.capacity || volumeGb,
+    requestId: input.request_id
   });
 
   throw new Error(`Unsupported provider: ${provider}`);

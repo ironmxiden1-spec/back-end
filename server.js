@@ -27,8 +27,13 @@ function resolveMongoMemorySystemBinary() {
 }
 
 // ===== MIDDLEWARE =====
+const allowedOrigins = String(process.env.ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 app.use(cors({
-  origin: "*"
+  origin: allowedOrigins.length ? allowedOrigins : "*"
 }));
 app.use(express.json());
 
@@ -84,6 +89,7 @@ app.use("/api/auth", require("./routes/auth"));
 app.use("/api/wallet", require("./routes/wallet"));
 app.use("/api/transactions", require("./routes/transactions"));
 app.use("/api/resellerxpress", require("./routes/resellerxpress"));
+app.use("/api/datamart", require("./routes/datamart"));
 app.use("/api/remadata", require("./routes/remadata"));
 app.use("/api/sendcomms", require("./routes/sendcomms"));
 app.use("/api/support", require("./routes/support"));
