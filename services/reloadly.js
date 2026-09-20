@@ -16,18 +16,23 @@ function getClientSecret() {
   return String(process.env.RELOADLY_CLIENT_SECRET || "").trim();
 }
 
+function getConfiguredAccessToken() {
+  return String(process.env.RELOADLY_ACCESS_TOKEN || "").trim();
+}
+
 function getCountryCode() {
   return String(process.env.RELOADLY_COUNTRY_CODE || "GH").trim().toUpperCase();
 }
 
 function isConfigured() {
-  return Boolean(getClientId() && getClientSecret());
+  return Boolean(getConfiguredAccessToken() || (getClientId() && getClientSecret()));
 }
 
 let tokenCache = { value: "", expiresAt: 0 };
 
 async function getAccessToken() {
   if (!isConfigured()) throw new Error("Reloadly client credentials are not configured");
+  if (getConfiguredAccessToken()) return getConfiguredAccessToken();
   if (tokenCache.value && tokenCache.expiresAt > Date.now() + 60000) return tokenCache.value;
 
   const response = await axios.post(getAuthUrl(), {

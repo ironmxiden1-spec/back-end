@@ -235,7 +235,7 @@ router.get("/providers", async (req, res) => {
     try { const result = await remadata.getWalletBalance(); providers[1].balance = Number(result.balance ?? result.data?.balance?.balance ?? result.data?.balance); } catch (error) { providers[1].error = error.message; }
   }
   if (providers[2].configured) {
-    try { const result = await reloadly.getWalletBalance(); providers[2].balance = Number(result.balance ?? result.data?.balance); } catch (error) { providers[2].error = error.message; }
+    try { const result = await reloadly.getWalletBalance(); providers[2].balance = Number(result.balance ?? result.data?.balance); } catch (error) { providers[2].error = error.response?.data?.message || error.message; }
   }
   return res.json({ providers });
 });
@@ -264,7 +264,7 @@ router.get("/balances", async (req, res) => {
       try { const value = await remadata.getWalletBalance(); result.providers.push({ id: "remadata", amount: Number(value.balance ?? value.data?.balance?.balance ?? value.data?.balance) }); } catch (error) { result.providers.push({ id: "remadata", error: error.message }); }
     }
       if (reloadly.isConfigured()) {
-        try { const value = await reloadly.getWalletBalance(); result.providers.push({ id: "reloadly", amount: Number(value.balance ?? value.data?.balance) }); } catch (error) { result.providers.push({ id: "reloadly", error: error.message }); }
+        try { const value = await reloadly.getWalletBalance(); result.providers.push({ id: "reloadly", amount: Number(value.balance ?? value.data?.balance) }); } catch (error) { result.providers.push({ id: "reloadly", error: error.response?.data?.message || error.message }); }
       }
     return result;
   });
