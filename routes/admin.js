@@ -234,13 +234,17 @@ router.post("/email", async (req, res) => {
   const message = String(req.body?.message || "").trim();
   if (!subject || !message) return res.status(400).json({ msg: "Subject and message are required" });
   try {
+    const attachments = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
+    if (attachments.length > 5 || attachments.some((item) => !/^image\/(png|jpeg|gif|webp)$/.test(String(item.contentType || "")) || !String(item.content || "").match(/^[A-Za-z0-9+/]+=*$/) || Buffer.byteLength(String(item.content), "base64") > 5 * 1024 * 1024)) {
+      return res.status(400).json({ msg: "Attachments must be up to five PNG, JPG, GIF, or WebP images under 5 MB each" });
+    }
     let recipients = Array.isArray(req.body?.recipients) ? req.body.recipients : [];
     if (req.body?.allCustomers) {
       recipients = isFallback(req)
         ? readUsers().map((user) => user.email)
         : (await User.find({}, { email: 1 }).lean()).map((user) => user.email);
     }
-    const result = await sendCustomerEmail({ recipients, subject, message });
+    const result = await sendCustomerEmail({ recipients, subject, message, attachments });
     return res.json({ msg: `Email sent to ${result.sent} customer${result.sent === 1 ? "" : "s"}.`, ...result });
   } catch (error) {
     return res.status(502).json({ msg: error.message || "Unable to send customer email" });

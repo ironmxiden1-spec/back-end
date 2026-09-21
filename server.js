@@ -35,7 +35,7 @@ const allowedOrigins = String(process.env.ALLOWED_ORIGINS || "")
 app.use(cors({
   origin: allowedOrigins.length ? allowedOrigins : "*"
 }));
-app.use(express.json());
+app.use(express.json({ limit: "40mb" }));
 
 // ===== DATABASE =====
 async function startDatabase() {
