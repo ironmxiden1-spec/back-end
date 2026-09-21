@@ -1,9 +1,11 @@
 const express = require("express");
 const crypto = require("crypto");
+const axios = require("axios");
 const User = require("../models/user");
 const Transaction = require("../models/Transaction");
 const AdminSetting = require("../models/AdminSetting");
 const reseller = require("../services/resellerxpress");
+const { placeProviderOrder, getPlans } = reseller;
 const remadata = require("../services/remadata");
 const datamart = require("../services/datamart");
 const { sendCustomerEmail } = require("../services/resend");
@@ -242,6 +244,67 @@ router.post("/email", async (req, res) => {
     return res.json({ msg: `Email sent to ${result.sent} customer${result.sent === 1 ? "" : "s"}.`, ...result });
   } catch (error) {
     return res.status(502).json({ msg: error.message || "Unable to send customer email" });
+  }
+});
+
+router.post("/bulk/purchase", async (req, res) => {
+  const mode = String(req.body?.mode || "").toLowerCase();
+  const network = String(req.body?.network || "").toLowerCase();
+  const planId = String(req.body?.planId || "");
+  const numbers = [...new Set((Array.isArray(req.body?.numbers) ? req.body.numbers : [])
+    .map((value) => String(value).replace(/[\s-]/g, "")).filter((value) => /^0\d{9}$/.test(value)))];
+  if (!["free", "paystack"].includes(mode) || !network || !planId || !numbers.length) {
+    return res.status(400).json({ msg: "Choose a bundle, valid phone numbers, and a purchase method" });
+  }
+
+  try {
+    const plans = await getPlans(network, { allProviders: true, ignoreProviderSelection: true });
+    const plan = plans.find((item) => String(item.id) === planId);
+    if (!plan || plan.available === false || plan.purchasable === false) {
+      return res.status(409).json({ msg: "The selected bundle is no longer available" });
+    }
+    const total = Number((Number(plan.sellingPrice || 0) * numbers.length).toFixed(2));
+    if (!total) return res.status(400).json({ msg: "The selected bundle has no valid price" });
+
+    if (mode === "paystack") {
+      const reference = String(req.body?.reference || "");
+      if (!reference || !process.env.PAYSTACK_SECRET_KEY) return res.status(400).json({ msg: "Paystack payment reference is required" });
+      const payment = await axios.get(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } });
+      const data = payment.data?.data || {};
+      if (payment.data?.status !== true || data.status !== "success" || Number(data.amount || 0) / 100 < total) {
+        return res.status(400).json({ msg: "Paystack payment could not be verified for this bulk order" });
+      }
+    }
+
+    const results = [];
+    for (const phone of numbers) {
+      const requestId = `WIMPS_BULK_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const result = await placeProviderOrder(plan.provider, {
+        plan_id: plan.id, phone, network: plan.network, volumeGb: plan.volumeGb,
+        operatorId: plan.operatorId, providerAmount: plan.price || plan.cost || plan.total,
+        request_id: requestId, quantity: 1
+      });
+      const status = String(result?.data?.status || result?.data?.delivery_status || result?.status || "pending").toLowerCase();
+      const transaction = {
+        _id: crypto.randomUUID(), email: "admin@admin.admin", type: "purchase", bundle: plan.name || plan.volume,
+        network: plan.network, provider: plan.provider, amount: Number(plan.sellingPrice || 0), providerCost: Number(plan.price || plan.cost || 0),
+        expectedProfit: Number((Number(plan.sellingPrice || 0) - Number(plan.price || plan.cost || 0)).toFixed(2)), phone,
+        paymentMethod: mode === "paystack" ? "paystack" : "admin_free", reference: req.body.reference || requestId,
+        providerRequestId: result?.request_id || result?.data?.request_id || requestId,
+        status: ["completed", "delivered", "success", "sent"].includes(status) ? "completed" : "pending", date: new Date()
+      };
+      if (isFallback(req)) {
+        const transactions = readTransactions();
+        transactions.push(transaction);
+        writeTransactions(transactions);
+      } else {
+        await Transaction.create(transaction);
+      }
+      results.push({ phone, status: transaction.status });
+    }
+    return res.json({ msg: `${results.length} bulk bundle${results.length === 1 ? "" : "s"} submitted.`, total, results });
+  } catch (error) {
+    return res.status(502).json({ msg: error.response?.data?.message || error.message || "Bulk delivery failed" });
   }
 });
 
