@@ -6,6 +6,7 @@ const AdminSetting = require("../models/AdminSetting");
 const reseller = require("../services/resellerxpress");
 const remadata = require("../services/remadata");
 const datamart = require("../services/datamart");
+const { sendCustomerEmail } = require("../services/resend");
 const { readData, writeData } = require("../utils/fileDb");
 const { isFallback, readUsers, writeUsers, readTransactions, writeTransactions } = require("../utils/localStore");
 
@@ -218,6 +219,24 @@ router.get("/customers", async (req, res) => {
     return res.json({ data });
   } catch (error) {
     return res.json({ data: fallbackUsers.slice(0, limit) });
+  }
+});
+
+router.post("/email", async (req, res) => {
+  const subject = String(req.body?.subject || "").trim();
+  const message = String(req.body?.message || "").trim();
+  if (!subject || !message) return res.status(400).json({ msg: "Subject and message are required" });
+  try {
+    let recipients = Array.isArray(req.body?.recipients) ? req.body.recipients : [];
+    if (req.body?.allCustomers) {
+      recipients = isFallback(req)
+        ? readUsers().map((user) => user.email)
+        : (await User.find({}, { email: 1 }).lean()).map((user) => user.email);
+    }
+    const result = await sendCustomerEmail({ recipients, subject, message });
+    return res.json({ msg: `Email sent to ${result.sent} customer${result.sent === 1 ? "" : "s"}.`, ...result });
+  } catch (error) {
+    return res.status(502).json({ msg: error.message || "Unable to send customer email" });
   }
 });
 
