@@ -5,11 +5,7 @@ const remadata = require("./remadata");
 const { getBundles: getRemaDataBundles, buyData: buyRemaData, isConfigured: isRemaDataConfigured } = remadata;
 const { getConfiguredSmsFee, getSmsPricing } = require("./sendcomms");
 
-const DEFAULT_PROVIDER_FEE = Number(process.env.DEFAULT_PROVIDER_FEE || 0.5);
-let targetProfit = Number(process.env.TARGET_PROFIT || 1);
-let minimumProfit = Number(process.env.MINIMUM_PROFIT || 0.5);
-let maximumOneGbPrice = Number(process.env.MAXIMUM_1GB_PRICE || 5);
-let networkMaximumOneGbPrice = {};
+let handlingFees = { mtn: 1, telecel: 1, airteltigo: 1 };
 let selectedProvider = "";
 
 function getBaseUrl() {
@@ -21,11 +17,8 @@ function getApiKey() {
 }
 
 function configurePricingRules(settings = {}) {
-  if (Number.isFinite(Number(settings.targetProfit))) targetProfit = Number(settings.targetProfit);
-  if (Number.isFinite(Number(settings.minimumProfit))) minimumProfit = Number(settings.minimumProfit);
-  if (Number.isFinite(Number(settings.maxOneGb))) maximumOneGbPrice = Number(settings.maxOneGb);
-  if (settings.networkPricing && typeof settings.networkPricing === "object") {
-    networkMaximumOneGbPrice = Object.fromEntries(Object.entries(settings.networkPricing)
+  if (settings.handlingFees && typeof settings.handlingFees === "object") {
+    handlingFees = Object.fromEntries(Object.entries(settings.handlingFees)
       .filter(([, value]) => Number.isFinite(Number(value)) && Number(value) >= 0)
       .map(([network, value]) => [normalizeNetwork(network), Number(value)]));
   }
@@ -36,7 +29,7 @@ function configurePricingRules(settings = {}) {
 
 async function loadPricingRules() {
   try {
-    const records = await AdminSetting.find({ key: { $in: ["targetProfit", "minimumProfit", "maxOneGb", "networkPricing", "selectedProvider"] } }).lean();
+    const records = await AdminSetting.find({ key: { $in: ["handlingFees", "selectedProvider"] } }).lean();
     configurePricingRules(Object.fromEntries(records.map((record) => [record.key, record.value])));
   } catch (error) {
     // Environment defaults remain active when the database is unavailable.
@@ -88,13 +81,13 @@ function getFallbackPlans(network) {
   ]));
 
   return (samples[normalized] || samples.mtn).map((plan) => {
-    const pricing = calculateSellingPrice(plan.total, plan.volumeGb, plan.network);
-    const smsPricing = addSmsPricing({ volumeGb: plan.volumeGb, network: plan.network }, plan.total);
+    const pricing = calculateSellingPrice(plan.price, plan.volumeGb, plan.network);
+    const smsPricing = addSmsPricing({ volumeGb: plan.volumeGb, network: plan.network }, plan.price);
     if (!smsPricing) return null;
     return {
       ...plan,
-      cost: plan.total,
-      smsFee: Number(smsPricing.smsFee || 0),
+      cost: plan.price,
+      smsFee: 0,
       sellingPrice: smsPricing.sellingPrice || pricing?.sellingPrice,
       expectedProfit: smsPricing.expectedProfit || pricing?.expectedProfit
     };
@@ -103,43 +96,14 @@ function getFallbackPlans(network) {
 
 function calculateSellingPrice(totalCost, volumeGb, network) {
   const cost = Number(totalCost);
-  const volume = Number(volumeGb);
-  const billableVolume = Number.isFinite(volume) && volume > 0 ? volume : 1;
   if (!Number.isFinite(cost) || cost <= 0) return null;
-
-  const targetProfitTotal = targetProfit * billableVolume;
-  const minimumProfitTotal = minimumProfit * billableVolume;
-  const targetPrice = cost + targetProfitTotal;
-  const networkPrice = networkMaximumOneGbPrice[normalizeNetwork(network)] ?? maximumOneGbPrice;
-  const maximumPrice = networkPrice * billableVolume;
-  if (targetPrice <= maximumPrice) {
-    return {
-      sellingPrice: Number(targetPrice.toFixed(2)),
-      expectedProfit: Number(targetProfitTotal.toFixed(2))
-    };
-  }
-
-  const minimumPrice = cost + minimumProfitTotal;
-  if (minimumPrice <= maximumPrice) {
-    return {
-      sellingPrice: Number(minimumPrice.toFixed(2)),
-      expectedProfit: Number(minimumProfitTotal.toFixed(2))
-    };
-  }
-
-  if (cost <= maximumPrice) {
-    return {
-      sellingPrice: Number(maximumPrice.toFixed(2)),
-      expectedProfit: Number((maximumPrice - cost).toFixed(2))
-    };
-  }
-
-  return null;
+  const fee = Number(handlingFees[normalizeNetwork(network)] ?? 1);
+  return { sellingPrice: Number((cost + fee).toFixed(2)), expectedProfit: fee };
 }
 
 function addSmsPricing(pricing, totalCost, smsFee = getConfiguredSmsFee()) {
-  const adjusted = calculateSellingPrice(Number(totalCost) + smsFee, pricing.volumeGb, pricing.network);
-  return adjusted ? { ...adjusted, smsFee } : null;
+  const adjusted = calculateSellingPrice(Number(totalCost), pricing.volumeGb, pricing.network);
+  return adjusted ? { ...adjusted, smsFee: 0 } : null;
 }
 
 function normalizeNetwork(network) {
@@ -334,13 +298,13 @@ function buildVisiblePlans(combined, normalizedNetwork, smsFee, options = {}) {
       return;
     }
 
-    const pricing = addSmsPricing({ volumeGb: plan.volumeGb, network: plan.network }, Number(plan.total), smsFee);
+    const pricing = addSmsPricing({ volumeGb: plan.volumeGb, network: plan.network }, Number(plan.price), smsFee);
     if (!pricing) {
       const visibleCost = Number((Number(plan.total) + Number(smsFee || 0)).toFixed(2));
       uniquePlans.push({
         ...plan,
-        cost: Number(plan.total),
-        smsFee: Number(smsFee || 0),
+        cost: Number(plan.price),
+        smsFee: 0,
         sellingPrice: visibleCost,
         expectedProfit: 0,
         purchasable: true,
@@ -354,8 +318,8 @@ function buildVisiblePlans(combined, normalizedNetwork, smsFee, options = {}) {
       total: Number(plan.total || 0),
       price: Number(plan.price || 0),
       fee: Number(plan.fee || 0),
-      cost: Number(plan.total),
-      smsFee: Number(pricing.smsFee || 0),
+      cost: Number(plan.price),
+      smsFee: 0,
       sellingPrice: pricing.sellingPrice,
       purchasable: true,
       expectedProfit: pricing.expectedProfit

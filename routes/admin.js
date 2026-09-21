@@ -35,19 +35,7 @@ function startOfDay() {
 const PROVIDER_IDS = ["", "resellerxpress", "remadata", "datamart"];
 
 const SETTING_SCHEMA = {
-  targetProfit: {
-    coerce: (value) => Number(value),
-    validate: (value) => Number.isFinite(value) && value >= 0
-  },
-  minimumProfit: {
-    coerce: (value) => Number(value),
-    validate: (value) => Number.isFinite(value) && value >= 0
-  },
-  maxOneGb: {
-    coerce: (value) => Number(value),
-    validate: (value) => Number.isFinite(value) && value >= 0
-  },
-  networkPricing: {
+  handlingFees: {
     coerce: (value) => value && typeof value === "object" ? value : {},
     validate: (value) => Object.values(value).every((item) => Number.isFinite(Number(item)) && Number(item) >= 0)
   },
@@ -237,7 +225,7 @@ router.get("/settings", async (req, res) => {
   try {
     const records = await AdminSetting.find().lean();
     const settings = Object.fromEntries(records.map((record) => [record.key, record.value]));
-    return res.json({ settings: { targetProfit: 1, minimumProfit: 0.5, maxOneGb: 5, networkPricing: { mtn: 5, telecel: 5, airteltigo: 5 }, referralReward: 0.1, neverBelowCost: true, autoProvider: true, ...settings } });
+    return res.json({ settings: { handlingFees: { mtn: 1, telecel: 1, airteltigo: 1 }, referralReward: 0.1, autoProvider: true, ...settings } });
   } catch (error) {
     return res.status(500).json({ msg: "Unable to load admin settings" });
   }
@@ -251,7 +239,7 @@ router.put("/settings", async (req, res) => {
       const value = schema.coerce(req.body[key]);
       if (!schema.validate(value)) return res.status(400).json({ msg: `Invalid setting: ${key}` });
       await AdminSetting.findOneAndUpdate({ key }, { key, value, updatedAt: new Date() }, { upsert: true, new: true });
-      if (["targetProfit", "minimumProfit", "maxOneGb", "networkPricing"].includes(key)) reseller.configurePricingRules({ [key]: value });
+      if (key === "handlingFees") reseller.configurePricingRules({ handlingFees: value });
       updates[key] = value;
     }
     return res.json({ settings: updates });

@@ -66,13 +66,13 @@ test('completed purchases include SMS notification and delivery fee wiring', () 
   assert.ok(pricingSource.includes('getConfiguredSmsFee'), 'SMS delivery fee must be included in plan pricing');
 });
 
-test('bundle profit scales with the GB volume', () => {
+test('bundle handling fee is fixed per network', () => {
   const { calculateSellingPrice } = require('../services/resellerxpress');
   const oneGb = calculateSellingPrice(4, 1);
   const hundredGb = calculateSellingPrice(400, 100);
   assert.equal(oneGb.expectedProfit, 1, 'one GB should target one cedi profit');
-  assert.equal(hundredGb.expectedProfit, 100, '100GB should target 100 cedis profit');
-  assert.equal(hundredGb.sellingPrice, 500, '100GB selling price should include scaled profit');
+  assert.equal(hundredGb.expectedProfit, 1, 'handling fee should not scale with bundle size');
+  assert.equal(hundredGb.sellingPrice, 401, 'bundle amount should remain the provider price plus handling fee');
 });
 
 test('resellerxpress plans should return a visible fallback list when upstream plans are empty', async () => {

@@ -121,11 +121,11 @@ test('settings validation rejects a negative numeric setting', async () => {
     const response = await fetch(`${baseUrl}/settings`, {
       method: 'PUT',
       headers: { 'X-Admin-Token': ADMIN_TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ targetProfit: -1 })
+      body: JSON.stringify({ handlingFees: { mtn: -1 } })
     });
     assert.equal(response.status, 400);
     const body = await response.json();
-    assert.match(body.msg, /targetProfit/);
+    assert.match(body.msg, /handlingFees/);
   });
 });
 

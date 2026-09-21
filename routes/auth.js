@@ -7,6 +7,7 @@ const { createId, isFallback, readUsers, writeUsers } = require("../utils/localS
 const { createAuthToken, requireUser } = require("../utils/auth");
 const AdminSetting = require("../models/AdminSetting");
 const { readData } = require("../utils/fileDb");
+const { sendPasswordResetEmail } = require("../services/resend");
 
 async function getDataPurgeNotice(req) {
   try {
@@ -39,10 +40,6 @@ function verifyPassword(password, storedPassword) {
 
 function resetTokenHash(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
-}
-
-function resetResponse(token) {
-  return process.env.NODE_ENV === "production" ? {} : { resetToken: token };
 }
 
 function makeReferralCode(user) {
@@ -185,7 +182,10 @@ router.post("/forgot-password", async (req, res) => {
         resetPasswordExpires: expires
       });
     }
-    return res.json({ msg: "If that email is registered, reset instructions are ready.", ...resetResponse(token) });
+    const resetUrl = `${String(process.env.FRONTEND_URL || "").replace(/\/$/, "")}/login-page.html?reset=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`;
+    const exists = isFallback(req) ? readUsers().some((item) => String(item.email).toLowerCase() === email) : await User.exists({ email });
+    if (exists) await sendPasswordResetEmail({ email, resetUrl });
+    return res.json({ msg: "If that email is registered, reset instructions have been sent." });
   } catch (error) {
     return res.status(500).json({ msg: "Unable to start password reset" });
   }
