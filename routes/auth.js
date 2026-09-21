@@ -37,6 +37,14 @@ function verifyPassword(password, storedPassword) {
   return crypto.timingSafeEqual(Buffer.from(actualHash, "hex"), Buffer.from(expectedHash, "hex"));
 }
 
+function resetTokenHash(token) {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+function resetResponse(token) {
+  return process.env.NODE_ENV === "production" ? {} : { resetToken: token };
+}
+
 function makeReferralCode(user) {
   const source = String(user._id || user.id || crypto.randomBytes(5).toString("hex"));
   return `WIMPS-${source.replace(/[^a-z0-9]/gi, "").slice(-8).toUpperCase()}`;
@@ -153,6 +161,67 @@ router.post("/register", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ msg: "Server error" });
+  }
+});
+
+router.post("/forgot-password", async (req, res) => {
+  const email = String(req.body?.email || "").trim().toLowerCase();
+  if (!email) return res.status(400).json({ msg: "Email is required" });
+
+  const token = crypto.randomBytes(32).toString("hex");
+  const expires = new Date(Date.now() + 15 * 60 * 1000);
+  try {
+    if (isFallback(req)) {
+      const users = readUsers();
+      const user = users.find((item) => String(item.email).toLowerCase() === email);
+      if (user) {
+        user.resetPasswordTokenHash = resetTokenHash(token);
+        user.resetPasswordExpires = expires.toISOString();
+        writeUsers(users);
+      }
+    } else {
+      await User.findOneAndUpdate({ email }, {
+        resetPasswordTokenHash: resetTokenHash(token),
+        resetPasswordExpires: expires
+      });
+    }
+    return res.json({ msg: "If that email is registered, reset instructions are ready.", ...resetResponse(token) });
+  } catch (error) {
+    return res.status(500).json({ msg: "Unable to start password reset" });
+  }
+});
+
+router.post("/reset-password", async (req, res) => {
+  const email = String(req.body?.email || "").trim().toLowerCase();
+  const token = String(req.body?.token || "");
+  const password = String(req.body?.password || "");
+  if (!email || !token || password.length < 6) {
+    return res.status(400).json({ msg: "Email, reset token, and a password of at least 6 characters are required" });
+  }
+
+  const tokenHash = resetTokenHash(token);
+  try {
+    if (isFallback(req)) {
+      const users = readUsers();
+      const user = users.find((item) => String(item.email).toLowerCase() === email);
+      if (!user || user.resetPasswordTokenHash !== tokenHash || new Date(user.resetPasswordExpires || 0) < new Date()) {
+        return res.status(400).json({ msg: "Invalid or expired reset token" });
+      }
+      user.password = hashPassword(password);
+      delete user.resetPasswordTokenHash;
+      delete user.resetPasswordExpires;
+      writeUsers(users);
+    } else {
+      const user = await User.findOne({ email, resetPasswordTokenHash: tokenHash, resetPasswordExpires: { $gt: new Date() } });
+      if (!user) return res.status(400).json({ msg: "Invalid or expired reset token" });
+      user.password = hashPassword(password);
+      user.resetPasswordTokenHash = "";
+      user.resetPasswordExpires = null;
+      await user.save();
+    }
+    return res.json({ msg: "Password reset successful. You can now log in." });
+  } catch (error) {
+    return res.status(500).json({ msg: "Unable to reset password" });
   }
 });
 
