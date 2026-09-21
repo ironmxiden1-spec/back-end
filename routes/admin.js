@@ -166,6 +166,11 @@ router.delete("/transactions", async (req, res) => {
   if (String(req.body?.confirmation || "") !== "DELETE TRANSACTION HISTORY") {
     return res.status(400).json({ msg: "Confirmation required" });
   }
+  if (isFallback(req)) {
+    const transactions = readTransactions();
+    writeTransactions([]);
+    return res.json({ deleted: transactions.length });
+  }
   try {
     const result = await Transaction.deleteMany({});
     return res.json({ deleted: result.deletedCount || 0 });
