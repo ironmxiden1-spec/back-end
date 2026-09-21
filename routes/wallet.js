@@ -370,7 +370,8 @@ router.post("/buy", async (req, res) => {
         phone,
         paymentMethod: reference ? "paystack" : "wallet",
         status: "pending",
-        reference: reference || requestId
+        reference: reference || requestId,
+        providerRequestId: requestId
       });
 
       try {
@@ -419,7 +420,10 @@ router.post("/buy", async (req, res) => {
 
         const providerStatus = String(
           result?.data?.delivery_status || result?.data?.fulfillment_status ||
+          result?.data?.deliveryStatus || result?.data?.order_status ||
+          result?.data?.order?.status ||
           result?.delivery_status || result?.fulfillment_status ||
+          result?.deliveryStatus || result?.order_status ||
           result?.data?.status || result?.status || result?.order?.status || "pending"
         ).toLowerCase();
         const confirmedDeliveryStatuses = ["completed", "delivered", "sent", "delivered_successfully"];
@@ -430,6 +434,7 @@ router.post("/buy", async (req, res) => {
         if (tx.status === "completed") tx.deliveredAt = new Date();
         // Keep the Paystack reference stable so a callback retry cannot deliver twice.
         if (!reference) tx.reference = result?.order?.request_id || requestId;
+        tx.providerRequestId = result?.order?.request_id || result?.data?.request_id || result?.request_id || requestId;
         await tx.save();
 
         let smsSent = false;

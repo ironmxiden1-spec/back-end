@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const Transaction = require("../models/Transaction");
 const { requireUser } = require("../utils/auth");
+const { getOrderStatus } = require("../services/resellerxpress");
 
 router.use(requireUser);
 
@@ -12,6 +13,22 @@ router.get("/:email", async (req, res) => {
       return res.status(403).json({ msg: "You can only access your own transactions" });
     }
     const txs = await Transaction.find({ email: req.params.email });
+    await Promise.all(txs.filter((tx) => tx.type === "purchase" && tx.status === "pending" && tx.provider === "resellerxpress" && tx.providerRequestId).map(async (tx) => {
+      try {
+        const result = await getOrderStatus(tx.providerRequestId);
+        const status = String(result?.data?.delivery_status || result?.data?.fulfillment_status || result?.data?.status || result?.status || result?.order?.status || "pending").toLowerCase();
+        if (["completed", "delivered", "sent", "delivered_successfully", "success"].includes(status)) {
+          tx.status = "completed";
+          tx.deliveredAt = tx.deliveredAt || new Date();
+          await tx.save();
+        } else if (["failed", "cancelled", "canceled"].includes(status)) {
+          tx.status = "failed";
+          await tx.save();
+        }
+      } catch (error) {
+        console.warn("TRANSACTION STATUS SYNC ERROR:", error.message);
+      }
+    }));
     txs.sort((a, b) => new Date(b.date || b.createdAt || 0) - new Date(a.date || a.createdAt || 0));
 
     res.json(txs);

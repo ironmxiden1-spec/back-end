@@ -1,13 +1,15 @@
 const axios = require("axios");
 const AdminSetting = require("../models/AdminSetting");
 const datamart = require("./datamart");
-const { getBundles: getRemaDataBundles, buyData: buyRemaData, isConfigured: isRemaDataConfigured } = require("./remadata");
+const remadata = require("./remadata");
+const { getBundles: getRemaDataBundles, buyData: buyRemaData, isConfigured: isRemaDataConfigured } = remadata;
 const { getConfiguredSmsFee, getSmsPricing } = require("./sendcomms");
 
 const DEFAULT_PROVIDER_FEE = Number(process.env.DEFAULT_PROVIDER_FEE || 0.5);
 let targetProfit = Number(process.env.TARGET_PROFIT || 1);
 let minimumProfit = Number(process.env.MINIMUM_PROFIT || 0.5);
 let maximumOneGbPrice = Number(process.env.MAXIMUM_1GB_PRICE || 5);
+let networkMaximumOneGbPrice = {};
 let selectedProvider = "";
 
 function getBaseUrl() {
@@ -22,6 +24,11 @@ function configurePricingRules(settings = {}) {
   if (Number.isFinite(Number(settings.targetProfit))) targetProfit = Number(settings.targetProfit);
   if (Number.isFinite(Number(settings.minimumProfit))) minimumProfit = Number(settings.minimumProfit);
   if (Number.isFinite(Number(settings.maxOneGb))) maximumOneGbPrice = Number(settings.maxOneGb);
+  if (settings.networkPricing && typeof settings.networkPricing === "object") {
+    networkMaximumOneGbPrice = Object.fromEntries(Object.entries(settings.networkPricing)
+      .filter(([, value]) => Number.isFinite(Number(value)) && Number(value) >= 0)
+      .map(([network, value]) => [normalizeNetwork(network), Number(value)]));
+  }
   if (["", "resellerxpress", "remadata", "datamart"].includes(String(settings.selectedProvider ?? ""))) {
     selectedProvider = String(settings.selectedProvider ?? "");
   }
@@ -29,7 +36,7 @@ function configurePricingRules(settings = {}) {
 
 async function loadPricingRules() {
   try {
-    const records = await AdminSetting.find({ key: { $in: ["targetProfit", "minimumProfit", "maxOneGb", "selectedProvider"] } }).lean();
+    const records = await AdminSetting.find({ key: { $in: ["targetProfit", "minimumProfit", "maxOneGb", "networkPricing", "selectedProvider"] } }).lean();
     configurePricingRules(Object.fromEntries(records.map((record) => [record.key, record.value])));
   } catch (error) {
     // Environment defaults remain active when the database is unavailable.
@@ -81,8 +88,8 @@ function getFallbackPlans(network) {
   ]));
 
   return (samples[normalized] || samples.mtn).map((plan) => {
-    const pricing = calculateSellingPrice(plan.total, plan.volumeGb);
-    const smsPricing = addSmsPricing({ volumeGb: plan.volumeGb }, plan.total);
+    const pricing = calculateSellingPrice(plan.total, plan.volumeGb, plan.network);
+    const smsPricing = addSmsPricing({ volumeGb: plan.volumeGb, network: plan.network }, plan.total);
     if (!smsPricing) return null;
     return {
       ...plan,
@@ -94,17 +101,18 @@ function getFallbackPlans(network) {
   }).filter(Boolean);
 }
 
-function calculateSellingPrice(totalCost, volumeGb) {
+function calculateSellingPrice(totalCost, volumeGb, network) {
   const cost = Number(totalCost);
   const volume = Number(volumeGb);
   const billableVolume = Number.isFinite(volume) && volume > 0 ? volume : 1;
-  const isOneGb = Math.abs(billableVolume - 1) < 0.001;
   if (!Number.isFinite(cost) || cost <= 0) return null;
 
   const targetProfitTotal = targetProfit * billableVolume;
   const minimumProfitTotal = minimumProfit * billableVolume;
   const targetPrice = cost + targetProfitTotal;
-  if (!isOneGb || targetPrice <= maximumOneGbPrice) {
+  const networkPrice = networkMaximumOneGbPrice[normalizeNetwork(network)] ?? maximumOneGbPrice;
+  const maximumPrice = networkPrice * billableVolume;
+  if (targetPrice <= maximumPrice) {
     return {
       sellingPrice: Number(targetPrice.toFixed(2)),
       expectedProfit: Number(targetProfitTotal.toFixed(2))
@@ -112,17 +120,17 @@ function calculateSellingPrice(totalCost, volumeGb) {
   }
 
   const minimumPrice = cost + minimumProfitTotal;
-  if (minimumPrice <= maximumOneGbPrice) {
+  if (minimumPrice <= maximumPrice) {
     return {
       sellingPrice: Number(minimumPrice.toFixed(2)),
       expectedProfit: Number(minimumProfitTotal.toFixed(2))
     };
   }
 
-  if (cost <= maximumOneGbPrice) {
+  if (cost <= maximumPrice) {
     return {
-      sellingPrice: Number(maximumOneGbPrice.toFixed(2)),
-      expectedProfit: Number((maximumOneGbPrice - cost).toFixed(2))
+      sellingPrice: Number(maximumPrice.toFixed(2)),
+      expectedProfit: Number((maximumPrice - cost).toFixed(2))
     };
   }
 
@@ -130,7 +138,7 @@ function calculateSellingPrice(totalCost, volumeGb) {
 }
 
 function addSmsPricing(pricing, totalCost, smsFee = getConfiguredSmsFee()) {
-  const adjusted = calculateSellingPrice(Number(totalCost) + smsFee, pricing.volumeGb);
+  const adjusted = calculateSellingPrice(Number(totalCost) + smsFee, pricing.volumeGb, pricing.network);
   return adjusted ? { ...adjusted, smsFee } : null;
 }
 
@@ -271,15 +279,15 @@ async function getPlans(network, options = {}) {
   const requestedProvider = selectedProvider && options.ignoreProviderSelection !== true ? selectedProvider : "";
   if (requestedProvider === "remadata") {
     const remaPlans = await getRemaDataPlans(normalizedNetwork);
-    return buildVisiblePlans(remaPlans, normalizedNetwork, getConfiguredSmsFee(), options);
+    return buildVisiblePlans(await markProviderWalletAvailability(remaPlans), normalizedNetwork, getConfiguredSmsFee(), options);
   }
   if (requestedProvider === "datamart") {
     const datamartPlans = await getDataMartPlans(normalizedNetwork);
-    return buildVisiblePlans(datamartPlans, normalizedNetwork, getConfiguredSmsFee(), options);
+    return buildVisiblePlans(await markProviderWalletAvailability(datamartPlans), normalizedNetwork, getConfiguredSmsFee(), options);
   }
   if (requestedProvider === "resellerxpress") {
     const resellerPlans = await getResellerPlans(normalizedNetwork);
-    return buildVisiblePlans(resellerPlans, normalizedNetwork, getConfiguredSmsFee(), options);
+    return buildVisiblePlans(await markProviderWalletAvailability(resellerPlans), normalizedNetwork, getConfiguredSmsFee(), options);
   }
 
   const smsPricing = await getSmsPricing();
@@ -296,7 +304,7 @@ async function getPlans(network, options = {}) {
 
   const combined = [...resellerPlans, ...remadataPlans, ...datamartPlans];
 
-  return buildVisiblePlans(combined, normalizedNetwork, smsPricing.fee, options);
+  return buildVisiblePlans(await markProviderWalletAvailability(combined), normalizedNetwork, smsPricing.fee, options);
 }
 
 function buildVisiblePlans(combined, normalizedNetwork, smsFee, options = {}) {
@@ -326,7 +334,7 @@ function buildVisiblePlans(combined, normalizedNetwork, smsFee, options = {}) {
       return;
     }
 
-    const pricing = addSmsPricing({ volumeGb: plan.volumeGb }, Number(plan.total), smsFee);
+    const pricing = addSmsPricing({ volumeGb: plan.volumeGb, network: plan.network }, Number(plan.total), smsFee);
     if (!pricing) {
       const visibleCost = Number((Number(plan.total) + Number(smsFee || 0)).toFixed(2));
       uniquePlans.push({
@@ -405,6 +413,28 @@ function buildVisiblePlans(combined, normalizedNetwork, smsFee, options = {}) {
   });
 
   return [...cheapestByBundle.values()].sort((a, b) => a.total - b.total);
+}
+
+async function markProviderWalletAvailability(plans) {
+  const services = { resellerxpress: module.exports, remadata, datamart };
+  const providers = [...new Set(plans.map((plan) => plan.provider))]
+    .filter((provider) => services[provider]?.isConfigured?.());
+  const balances = await Promise.all(providers.map(async (provider) => {
+    try {
+      const value = await services[provider].getWalletBalance();
+      const amount = Number(value?.balance ?? value?.data?.balance?.balance ?? value?.data?.balance);
+      return [provider, Number.isFinite(amount) ? amount : null];
+    } catch (error) {
+      return [provider, null];
+    }
+  }));
+  const balanceByProvider = new Map(balances);
+  return plans.map((plan) => {
+    const balance = balanceByProvider.get(plan.provider);
+    if (balance === null || balance === undefined) return plan;
+    const required = Number(plan.total || plan.cost || plan.price || 0);
+    return balance >= required ? plan : { ...plan, available: false, purchasable: false };
+  });
 }
 
 async function placeProviderOrder(provider, input = {}) {

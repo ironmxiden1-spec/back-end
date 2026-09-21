@@ -47,6 +47,10 @@ const SETTING_SCHEMA = {
     coerce: (value) => Number(value),
     validate: (value) => Number.isFinite(value) && value >= 0
   },
+  networkPricing: {
+    coerce: (value) => value && typeof value === "object" ? value : {},
+    validate: (value) => Object.values(value).every((item) => Number.isFinite(Number(item)) && Number(item) >= 0)
+  },
   referralReward: {
     coerce: (value) => Number(value),
     validate: (value) => Number.isFinite(value) && value >= 0
@@ -147,6 +151,42 @@ router.get("/orders", async (req, res) => {
   }
 });
 
+router.patch("/orders/:id/status", async (req, res) => {
+  const status = String(req.body?.status || "").toLowerCase();
+  if (!["pending", "completed", "failed", "refunded"].includes(status)) {
+    return res.status(400).json({ msg: "Invalid order status" });
+  }
+  try {
+    const order = await Transaction.findByIdAndUpdate(req.params.id,
+      { $set: { status, ...(status === "completed" ? { deliveredAt: new Date() } : {}) } },
+      { new: true }).lean();
+    if (!order) return res.status(404).json({ msg: "Order not found" });
+    return res.json({ data: order });
+  } catch (error) {
+    const transactions = readTransactions();
+    const order = transactions.find((item) => String(item._id || item.id) === String(req.params.id));
+    if (!order) return res.status(404).json({ msg: "Order not found" });
+    order.status = status;
+    if (status === "completed") order.deliveredAt = new Date().toISOString();
+    writeTransactions(transactions);
+    return res.json({ data: order });
+  }
+});
+
+router.delete("/transactions", async (req, res) => {
+  if (String(req.body?.confirmation || "") !== "DELETE TRANSACTION HISTORY") {
+    return res.status(400).json({ msg: "Confirmation required" });
+  }
+  try {
+    const result = await Transaction.deleteMany({});
+    return res.json({ deleted: result.deletedCount || 0 });
+  } catch (error) {
+    const transactions = readTransactions();
+    writeTransactions([]);
+    return res.json({ deleted: transactions.length });
+  }
+});
+
 router.get("/activity", async (req, res) => {
   const fallbackUsers = readData("users.json") || [];
   const fallbackTransactions = readData("transactions.json") || [];
@@ -197,7 +237,7 @@ router.get("/settings", async (req, res) => {
   try {
     const records = await AdminSetting.find().lean();
     const settings = Object.fromEntries(records.map((record) => [record.key, record.value]));
-    return res.json({ settings: { targetProfit: 1, minimumProfit: 0.5, maxOneGb: 5, referralReward: 0.1, neverBelowCost: true, autoProvider: true, ...settings } });
+    return res.json({ settings: { targetProfit: 1, minimumProfit: 0.5, maxOneGb: 5, networkPricing: { mtn: 5, telecel: 5, airteltigo: 5 }, referralReward: 0.1, neverBelowCost: true, autoProvider: true, ...settings } });
   } catch (error) {
     return res.status(500).json({ msg: "Unable to load admin settings" });
   }
@@ -211,7 +251,7 @@ router.put("/settings", async (req, res) => {
       const value = schema.coerce(req.body[key]);
       if (!schema.validate(value)) return res.status(400).json({ msg: `Invalid setting: ${key}` });
       await AdminSetting.findOneAndUpdate({ key }, { key, value, updatedAt: new Date() }, { upsert: true, new: true });
-      if (["targetProfit", "minimumProfit", "maxOneGb"].includes(key)) reseller.configurePricingRules({ [key]: value });
+      if (["targetProfit", "minimumProfit", "maxOneGb", "networkPricing"].includes(key)) reseller.configurePricingRules({ [key]: value });
       updates[key] = value;
     }
     return res.json({ settings: updates });

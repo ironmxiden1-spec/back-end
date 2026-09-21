@@ -112,6 +112,7 @@ router.post("/register", async (req, res) => {
         user.referredBy = referrer.referralCode;
         referrer.referralCount = Number(referrer.referralCount || 0) + 1;
         referrer.referralCredits = Number((Number(referrer.referralCredits || 0) + reward).toFixed(2));
+        referrer.balance = Number((Number(referrer.balance || 0) + reward).toFixed(2));
       }
       users.push(user);
       writeUsers(users);
@@ -141,6 +142,7 @@ router.post("/register", async (req, res) => {
       user.referredBy = referrer.referralCode;
       referrer.referralCount += 1;
       referrer.referralCredits = Number((Number(referrer.referralCredits || 0) + reward).toFixed(2));
+      referrer.balance = Number((Number(referrer.balance || 0) + reward).toFixed(2));
       await referrer.save();
     }
 

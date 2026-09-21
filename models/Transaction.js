@@ -21,6 +21,7 @@ const TransactionSchema = new mongoose.Schema({
   },
   paymentMethod: String, // wallet | paystack
   reference: String,
+  providerRequestId: String,
   date: {
     type: Date,
     default: Date.now
