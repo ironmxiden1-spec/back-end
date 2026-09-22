@@ -1,10 +1,42 @@
 const axios = require("axios");
 
+const BLOCKED_RECIPIENT_DOMAINS = new Set([
+  "example.com",
+  "example.org",
+  "example.net",
+  "localhost",
+  "admin.admin",
+  "test.com",
+  "mailinator.com",
+  "tempmail.com",
+  "yopmail.com"
+]);
+
+function normalizeRecipients(recipients) {
+  const cleaned = [...new Set((Array.isArray(recipients) ? recipients : [recipients])
+    .map((email) => String(email || "").trim().toLowerCase())
+    .filter((email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)))]
+    .filter((email) => {
+      const domain = email.split("@")[1];
+      return !BLOCKED_RECIPIENT_DOMAINS.has(domain);
+    });
+
+  if (!cleaned.length) {
+    throw new Error("Resend requires a verified recipient address. Use a real customer email on a verified domain or a Resend testing address such as onboarding@resend.dev.");
+  }
+
+  return cleaned;
+}
+
 function getResendError(error) {
   const providerMessage = error.response?.data?.message || error.response?.data?.error;
   if (providerMessage) {
     const status = error.response.status ? ` (${error.response.status})` : "";
-    return `Resend rejected the email${status}: ${providerMessage}`;
+    const message = String(providerMessage);
+    if (/invalid `to` field|testing email address|example\.com|not verified|verified domain/i.test(message)) {
+      return "Resend requires a verified recipient address. Use a real customer email on a verified domain or a Resend testing address such as onboarding@resend.dev.";
+    }
+    return `Resend rejected the email${status}: ${message}`;
   }
   return error.message || "Resend email request failed";
 }
@@ -37,10 +69,7 @@ async function sendCustomerEmail({ recipients, subject, message, attachments = [
   const apiKey = String(process.env.RESEND_API_KEY || "").trim();
   const from = String(process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev").trim();
   if (!apiKey) throw new Error("RESEND_API_KEY is not configured");
-  const to = [...new Set((Array.isArray(recipients) ? recipients : [recipients])
-    .map((email) => String(email || "").trim().toLowerCase())
-    .filter((email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)))];
-  if (!to.length) throw new Error("At least one valid customer email is required");
+  const to = normalizeRecipients(recipients);
   const escaped = String(message).trim().replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replace(/\n/g, "<br>");
   const safeAttachments = attachments.map((attachment) => ({
     filename: String(attachment.filename || "image"),

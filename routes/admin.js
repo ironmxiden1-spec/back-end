@@ -247,7 +247,9 @@ router.post("/email", async (req, res) => {
     const result = await sendCustomerEmail({ recipients, subject, message, attachments });
     return res.json({ msg: `Email sent to ${result.sent} customer${result.sent === 1 ? "" : "s"}.`, ...result });
   } catch (error) {
-    return res.status(502).json({ msg: error.message || "Unable to send customer email" });
+    const message = error.message || "Unable to send customer email";
+    const status = /verified recipient|Resend requires|testing email|verified domain/i.test(message) ? 400 : 502;
+    return res.status(status).json({ msg: message });
   }
 });
 

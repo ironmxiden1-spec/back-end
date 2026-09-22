@@ -129,6 +129,47 @@ test('settings validation rejects a negative numeric setting', async () => {
   });
 });
 
+test('admin email endpoint rejects unverified Resend recipients with a clear message', async () => {
+  const axios = require('axios');
+  const previousKey = process.env.RESEND_API_KEY;
+  const previousFrom = process.env.RESEND_FROM_EMAIL;
+  process.env.RESEND_API_KEY = 'test-resend-key';
+  process.env.RESEND_FROM_EMAIL = 'onboarding@resend.dev';
+
+  const originalPost = axios.post;
+  axios.post = async () => {
+    const error = new Error('Request failed');
+    error.response = {
+      status: 422,
+      data: { message: 'Invalid `to` field. Please use our testing email address instead of domains like `example.com`.' }
+    };
+    throw error;
+  };
+
+  try {
+    await withAdminServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/email`, {
+        method: 'POST',
+        headers: { 'X-Admin-Token': ADMIN_TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipients: ['customer@example.com'],
+          subject: 'Hello',
+          message: 'Test email'
+        })
+      });
+      assert.equal(response.status, 400);
+      const body = await response.json();
+      assert.match(body.msg, /verified|testing email|Resend/i);
+    });
+  } finally {
+    axios.post = originalPost;
+    if (previousKey === undefined) delete process.env.RESEND_API_KEY;
+    else process.env.RESEND_API_KEY = previousKey;
+    if (previousFrom === undefined) delete process.env.RESEND_FROM_EMAIL;
+    else process.env.RESEND_FROM_EMAIL = previousFrom;
+  }
+});
+
 test('settings validation rejects an unsupported selectedProvider', async () => {
   await withAdminServer(async (baseUrl) => {
     const response = await fetch(`${baseUrl}/settings`, {
