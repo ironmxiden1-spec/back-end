@@ -27,7 +27,7 @@ function resolveMongoMemorySystemBinary() {
 }
 
 // ===== MIDDLEWARE =====
-const allowedOrigins = String(process.env.ALLOWED_ORIGINS || "")
+const allowedOrigins = String(process.env.ALLOWED_ORIGINS || process.env.CORS_ORIGINS || "")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
