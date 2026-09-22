@@ -11,7 +11,7 @@ function getResendError(error) {
 
 async function sendPasswordResetEmail({ email, resetUrl }) {
   const apiKey = String(process.env.RESEND_API_KEY || "").trim();
-  const from = String(process.env.RESEND_FROM_EMAIL || "support@wimps.shop").trim();
+  const from = String(process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev").trim();
   if (!apiKey) throw new Error("RESEND_API_KEY is not configured");
 
   try {
@@ -35,7 +35,7 @@ async function sendPasswordResetEmail({ email, resetUrl }) {
 
 async function sendCustomerEmail({ recipients, subject, message, attachments = [] }) {
   const apiKey = String(process.env.RESEND_API_KEY || "").trim();
-  const from = String(process.env.RESEND_FROM_EMAIL || "support@wimps.shop").trim();
+  const from = String(process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev").trim();
   if (!apiKey) throw new Error("RESEND_API_KEY is not configured");
   const to = [...new Set((Array.isArray(recipients) ? recipients : [recipients])
     .map((email) => String(email || "").trim().toLowerCase())
